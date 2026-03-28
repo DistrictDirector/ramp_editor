@@ -827,6 +827,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "editor"
+version = "0.1.0"
+dependencies = [
+ "flowmango",
+ "image 0.25.10",
+ "quartz",
+ "ramp2",
+ "rand 0.9.2",
+ "rgb",
+ "rodio",
+ "tokio",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1447,20 +1461,6 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
-name = "island_cafe"
-version = "0.1.0"
-dependencies = [
- "flowmango",
- "image 0.25.10",
- "quartz",
- "ramp2",
- "rand 0.9.2",
- "rgb",
- "rodio",
- "tokio",
-]
 
 [[package]]
 name = "itertools"

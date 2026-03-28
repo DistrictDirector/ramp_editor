@@ -1,546 +1,518 @@
+mod text;
+
 use flowmango::prelude::*;
-use quartz::{Align, Color, Font, NamedKey, TextSpec, make_text_aligned};
+use quartz::{Color, Font, FromSource, NamedKey, Shared, SourceSettings};
 use image::RgbaImage;
-use std::rc::Rc;
-use std::cell::RefCell;
-use std::time::Instant;
 use ramp::prism;
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct EditorSettings {
-    font_size:    f32,
-    line_height:  f32,
-    char_width:   f32,
-
-    num_pad_l:    f32,
-    num_pad_r:    f32,
-    gutter_cols:  f32,
-
-    cursor_width: f32,
-
-    scroll_speed: f32,
-
-    tab_size:     usize,
-
-    vis_rows:     usize,
-
-    bg:           &'static str,
-    bg_gutter:    &'static str,
-    bg_row_hl:    &'static str,
-    col_text:     &'static str,
-    col_lnum:     &'static str,
-    col_lnum_act: &'static str,
-    col_cursor:   &'static str,
-    col_gut_sep:  &'static str,
-}
-
-impl EditorSettings {
-    fn line_h(&self)   -> f32 { self.font_size * self.line_height }
-    fn char_w(&self)   -> f32 { self.font_size * self.char_width }
-    fn gutter_w(&self) -> f32 { self.char_w() * self.gutter_cols + self.num_pad_l + self.num_pad_r }
-    fn text_x(&self)   -> f32 { self.gutter_w() }
-    fn tab_str(&self)  -> String { " ".repeat(self.tab_size) }
+    font_size:                f32,
+    line_height_ratio:        f32,
+    char_width_ratio:         f32,
+    number_padding_left:      f32,
+    number_padding_right:     f32,
+    gutter_columns:           f32,
+    cursor_width:             f32,
+    scroll_speed:             f32,
+    tab_size:                 usize,
+    visible_rows:             usize,
+    background:               String,
+    background_gutter:        String,
+    background_row_highlight: String,
+    color_text:               String,
+    color_line_number:        String,
+    color_line_number_active: String,
+    color_cursor:             String,
+    color_gutter_separator:   String,
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
-            font_size:    16.0,
-            line_height:  1.4,
-            char_width:   0.6,
-
-            num_pad_l:    4.0,
-            num_pad_r:    18.0,
-            gutter_cols:  4.0,
-
-            cursor_width: 2.0,
-
-            scroll_speed: 1.0,
-
-            tab_size:     4,
-
-            vis_rows:     60,
-
-            bg:           "#1e1e2e",
-            bg_gutter:    "#181825",
-            bg_row_hl:    "#2a2a3d",
-            col_text:     "#cdd6f4",
-            col_lnum:     "#45475a",
-            col_lnum_act: "#cba6f7",
-            col_cursor:   "#cba6f7",
-            col_gut_sep:  "#ffffff",
+            font_size:                16.0,
+            line_height_ratio:        1.4,
+            char_width_ratio:         0.6,
+            number_padding_left:      4.0,
+            number_padding_right:     18.0,
+            gutter_columns:           4.0,
+            cursor_width:             2.0,
+            scroll_speed:             1.0,
+            tab_size:                 4,
+            visible_rows:             60,
+            background:               "#1e1e2e".into(),
+            background_gutter:        "#181825".into(),
+            background_row_highlight: "#2a2a3d".into(),
+            color_text:               "#cdd6f4".into(),
+            color_line_number:        "#45475a".into(),
+            color_line_number_active: "#cba6f7".into(),
+            color_cursor:             "#cba6f7".into(),
+            color_gutter_separator:   "#ffffff".into(),
         }
     }
 }
 
-// ─── Palette helper ───────────────────────────────────────────────────────────
-
-fn c(hex: &str) -> Color {
-    let h = hex.trim_start_matches('#');
-    let v = u32::from_str_radix(h, 16).unwrap_or(0);
-    Color(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8, 255)
+impl FromSource for EditorSettings {
+    fn from_source(source_params: &SourceSettings) -> Self {
+        let defaults = Self::default();
+        Self {
+            font_size:                source_params.f32("font_size")    .unwrap_or(defaults.font_size),
+            line_height_ratio:        source_params.f32("line_height")  .unwrap_or(defaults.line_height_ratio),
+            char_width_ratio:         source_params.f32("char_width")   .unwrap_or(defaults.char_width_ratio),
+            number_padding_left:      source_params.f32("num_pad_l")    .unwrap_or(defaults.number_padding_left),
+            number_padding_right:     source_params.f32("num_pad_r")    .unwrap_or(defaults.number_padding_right),
+            gutter_columns:           source_params.f32("gutter_cols")  .unwrap_or(defaults.gutter_columns),
+            cursor_width:             source_params.f32("cursor_width") .unwrap_or(defaults.cursor_width),
+            scroll_speed:             source_params.f32("scroll_speed") .unwrap_or(defaults.scroll_speed),
+            tab_size:                 source_params.usize("tab_size")   .unwrap_or(defaults.tab_size),
+            visible_rows:             defaults.visible_rows,
+            background:               source_params.str("bg")           .unwrap_or(defaults.background),
+            background_gutter:        source_params.str("bg_gutter")    .unwrap_or(defaults.background_gutter),
+            background_row_highlight: source_params.str("bg_row_hl")    .unwrap_or(defaults.background_row_highlight),
+            color_text:               source_params.str("col_text")     .unwrap_or(defaults.color_text),
+            color_line_number:        source_params.str("col_lnum")     .unwrap_or(defaults.color_line_number),
+            color_line_number_active: source_params.str("col_lnum_act") .unwrap_or(defaults.color_line_number_active),
+            color_cursor:             source_params.str("col_cursor")   .unwrap_or(defaults.color_cursor),
+            color_gutter_separator:   source_params.str("col_gut_sep")  .unwrap_or(defaults.color_gutter_separator),
+        }
+    }
 }
 
-// ─── Canvas helpers ───────────────────────────────────────────────────────────
-
-fn solid_img(w: f32, h: f32, col: Color) -> Image {
-    let mut img = RgbaImage::new(1, 1);
-    img.pixels_mut().for_each(|px| *px = image::Rgba([col.0, col.1, col.2, col.3]));
-    Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: img.into(), color: None }
+impl EditorSettings {
+    fn line_height(&self)  -> f32    { self.font_size * self.line_height_ratio }
+    fn char_width(&self)   -> f32    { self.font_size * self.char_width_ratio }
+    fn gutter_width(&self) -> f32    { self.char_width() * self.gutter_columns + self.number_padding_left + self.number_padding_right }
+    fn text_start_x(&self) -> f32    { self.gutter_width() }
+    fn tab_string(&self)   -> String { " ".repeat(self.tab_size) }
 }
 
-fn add_rect(cv: &mut Canvas, name: &str, x: f32, y: f32, w: f32, h: f32, col: Color, tag: &str) {
-    let mut obj = GameObject::build(name).position(x, y).size(w, h).tag(tag).finish();
-    obj.set_image(solid_img(w, h, col));
-    cv.add_game_object(name.to_string(), obj);
+
+pub(crate) fn hex_to_color(hex: &str) -> Color {
+    let trimmed = hex.trim_start_matches('#');
+    let value   = u32::from_str_radix(trimmed, 16).unwrap_or(0);
+    Color(
+        ((value >> 16) & 0xFF) as u8,
+        ((value >>  8) & 0xFF) as u8,
+        ( value        & 0xFF) as u8,
+        255,
+    )
 }
 
-fn add_text_obj(cv: &mut Canvas, name: &str, x: f32, y: f32, spec: TextSpec, line_h: f32, tag: &str) {
-    let mut obj = GameObject::build(name)
+fn solid_color_image(width: f32, height: f32, color: Color) -> Image {
+    let mut image = RgbaImage::new(1, 1);
+    image.pixels_mut().for_each(|pixel| {
+        *pixel = image::Rgba([color.0, color.1, color.2, color.3]);
+    });
+    Image {
+        shape: ShapeType::Rectangle(0.0, (width, height), 0.0),
+        image: image.into(),
+        color: None,
+    }
+}
+
+fn add_rectangle(
+    canvas: &mut Canvas,
+    name:   &str,
+    x:      f32,
+    y:      f32,
+    width:  f32,
+    height: f32,
+    color:  Color,
+    tag:    &str,
+) {
+    let mut object = GameObject::build(name)
         .position(x, y)
-        .size(4.0, line_h)
+        .size(width, height)
         .tag(tag)
         .finish();
-    obj.set_text(spec);
-    cv.add_game_object(name.to_string(), obj);
+    object.set_image(solid_color_image(width, height, color));
+    canvas.add_game_object(name.to_string(), object);
 }
 
-fn update_text(cv: &mut Canvas, name: &str, spec: TextSpec) {
-    if let Some(obj) = cv.get_game_object_mut(name) {
-        obj.set_text(spec);
+fn set_bounds(canvas: &mut Canvas, name: &str, x: f32, y: f32, width: f32, height: f32) {
+    if let Some(object) = canvas.get_game_object_mut(name) {
+        object.size     = (width, height);
+        object.position = (x, y);
     }
 }
 
-fn set_bounds(cv: &mut Canvas, name: &str, x: f32, y: f32, w: f32, h: f32) {
-    if let Some(obj) = cv.get_game_object_mut(name) {
-        obj.size     = (w, h);
-        obj.position = (x, y);
-    }
+fn rebuild_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f32, view_height: f32) {
+    let mut update = |name: &str, x: f32, y: f32, width: f32, height: f32, color: Color| {
+        if let Some(object) = canvas.get_game_object_mut(name) {
+            object.position = (x, y);
+            object.size     = (width, height);
+            object.set_image(solid_color_image(width, height, color));
+        }
+    };
+
+    update("bg",      0.0,                           0.0, view_width,                            view_height,            hex_to_color(&settings.background));
+    update("gutter",  0.0,                           0.0, settings.gutter_width(),               view_height,            hex_to_color(&settings.background_gutter));
+    update("gut_sep", settings.gutter_width() - 1.0, 0.0, 1.0,                                   view_height,            hex_to_color(&settings.color_gutter_separator));
+    update("row_hl",  settings.gutter_width(),        0.0, view_width - settings.gutter_width(),  settings.line_height(), hex_to_color(&settings.background_row_highlight));
+    update("cursor",  settings.text_start_x(),        0.0, settings.cursor_width,                settings.line_height(), hex_to_color(&settings.color_cursor));
 }
-
-fn set_pos(cv: &mut Canvas, name: &str, x: f32, y: f32) {
-    if let Some(obj) = cv.get_game_object_mut(name) {
-        obj.position = (x, y);
-    }
-}
-
-fn text_spec(text: &str, font: &Font, col: Color, font_size: f32) -> TextSpec {
-    make_text_aligned(text, font_size, font, col, Align::Left)
-}
-
-fn gnum_x(gnum: &str, s: &EditorSettings) -> f32 {
-    let num_w = gnum.len() as f32 * s.char_w();
-    (s.gutter_w() - s.num_pad_r - num_w).max(s.num_pad_l)
-}
-
-// ─── Perf counter ─────────────────────────────────────────────────────────────
-
-struct PerfFrame {
-    start:        Instant,
-    set_pos_calls:    u32,
-    update_text_calls: u32,
-}
-
-impl PerfFrame {
-    fn new() -> Self {
-        Self { start: Instant::now(), set_pos_calls: 0, update_text_calls: 0 }
-    }
-}
-
-// ─── Slot ─────────────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct Slot {
-    doc_row: Option<usize>,
-    text:    String,
-    gnum:    String,
-    is_cur:  bool,
-    sub_y:   f32,   // last rendered sub_y — skip set_pos if unchanged
-}
-
-impl Default for Slot {
-    fn default() -> Self {
-        Self { doc_row: None, text: String::new(), gnum: String::new(), is_cur: false, sub_y: f32::MAX }
-    }
-}
-
-// ─── Editor state ─────────────────────────────────────────────────────────────
 
 struct State {
-    lines:           Vec<String>,
-    cursor_row:      usize,
-    cursor_col:      usize,
-    scroll_y:        f32,
-    scroll_max:      f32,
-    first_row:       usize,
-    revision:        u64,
-    last_rev:        u64,
-    last_scroll:     f32,
-    last_cursor_row: usize,
-    last_cursor_col: usize,
-    slots:           Vec<Slot>,
-    line_names:      Vec<String>,
-    gnum_names:      Vec<String>,
-    perf:            PerfFrame,
+    lines:                           Vec<String>,
+    cursor_row:                      usize,
+    cursor_column:                   usize,
+    scroll_y:                        f32,
+    scroll_max:                      f32,
+    first_row:                       usize,
+    revision:                        u64,
+    last_revision:                   u64,
+    last_scroll:                     f32,
+    last_cursor_row:                 usize,
+    last_cursor_column:              usize,
+    line_names:                      Vec<String>,
+    gutter_number_names:             Vec<String>,
+    snap_cursor:                     bool,
+    last_edited_row:                 Option<usize>,
+    cached_line_text:                Vec<String>,
+    cached_gutter_number_text:       Vec<String>,
+    cached_gutter_number_is_current: Vec<bool>,
+    last_view_width:                 f32,
+    last_view_height:                f32,
+    render_slot:                     usize,
+    pending_render:                  bool,
 }
 
 impl State {
-    fn new(s: &EditorSettings) -> Self {
-        let line_names = (0..s.vis_rows).map(|i| format!("line_{}", i)).collect();
-        let gnum_names = (0..s.vis_rows).map(|i| format!("gnum_{}", i)).collect();
+    fn new(settings: &EditorSettings) -> Self {
+        let line_names          = (0..settings.visible_rows).map(|i| format!("line_{}", i)).collect();
+        let gutter_number_names = (0..settings.visible_rows).map(|i| format!("gnum_{}", i)).collect();
         Self {
-            lines:           vec![String::new()],
-            cursor_row:      0,
-            cursor_col:      0,
-            scroll_y:        0.0,
-            scroll_max:      0.0,
-            first_row:       usize::MAX,
-            revision:        1,
-            last_rev:        0,
-            last_scroll:     f32::MAX,
-            last_cursor_row: usize::MAX,
-            last_cursor_col: usize::MAX,
-            slots:           vec![Slot::default(); s.vis_rows],
+            lines:                           vec![String::new()],
+            cursor_row:                      0,
+            cursor_column:                   0,
+            scroll_y:                        0.0,
+            scroll_max:                      0.0,
+            first_row:                       usize::MAX,
+            revision:                        1,
+            last_revision:                   0,
+            last_scroll:                     f32::MAX,
+            last_cursor_row:                 usize::MAX,
+            last_cursor_column:              usize::MAX,
             line_names,
-            gnum_names,
-            perf:            PerfFrame::new(),
+            gutter_number_names,
+            snap_cursor:                     false,
+            last_edited_row:                 None,
+            cached_line_text:                vec![String::new(); settings.visible_rows],
+            cached_gutter_number_text:       vec![String::new(); settings.visible_rows],
+            cached_gutter_number_is_current: vec![false;         settings.visible_rows],
+            last_view_width:                 0.0,
+            last_view_height:                0.0,
+            render_slot:                     0,
+            pending_render:                  false,
         }
     }
 
-    fn bump(&mut self) { self.revision = self.revision.wrapping_add(1); }
+    fn bump(&mut self)                  { self.revision = self.revision.wrapping_add(1); }
+    fn bump_snap(&mut self)             { self.bump(); self.snap_cursor = true; }
+    fn bump_edit(&mut self, row: usize) { self.last_edited_row = Some(row); self.start_render(); self.bump_snap(); }
+    fn bump_structural(&mut self)       { self.last_edited_row = None;      self.start_render(); self.bump_snap(); }
 
-    fn update_scroll_max(&mut self, s: &EditorSettings, vh: f32) {
-        let content_h = self.lines.len() as f32 * s.line_h();
-        self.scroll_max = (content_h - vh).max(0.0);
-        self.scroll_y   = self.scroll_y.clamp(0.0, self.scroll_max);
+    fn start_render(&mut self) {
+        self.render_slot   = 0;
+        self.pending_render = true;
+    }
+
+    fn invalidate_all(&mut self) {
+        self.cached_line_text.iter_mut().for_each(|t| t.clear());
+        self.cached_gutter_number_text.iter_mut().for_each(|t| t.clear());
+        self.cached_gutter_number_is_current.iter_mut().for_each(|f| *f = false);
+        self.first_row   = usize::MAX;
+        self.last_scroll = f32::MAX;
+        self.start_render();
+        self.bump_structural();
+    }
+
+    fn update_scroll_max(&mut self, settings: &EditorSettings, view_height: f32) {
+        let content_height = self.lines.len() as f32 * settings.line_height();
+        self.scroll_max    = (content_height - view_height).max(0.0);
+        self.scroll_y      = self.scroll_y.clamp(0.0, self.scroll_max);
     }
 
     fn scroll_by(&mut self, delta: f32) {
         self.scroll_y = (self.scroll_y + delta).clamp(0.0, self.scroll_max);
     }
 
-    fn click(&mut self, vx: f32, vy: f32, s: &EditorSettings) {
-        if vx < s.gutter_w() { return; }
-        let row   = ((vy + self.scroll_y) / s.line_h()).floor() as usize;
-        let row   = row.min(self.lines.len().saturating_sub(1));
-        let col_f = ((vx - s.text_x()) / s.char_w()).round();
-        let col   = if col_f < 0.0 { 0 } else { col_f as usize };
-        let col   = col.min(self.lines[row].chars().count());
-        self.cursor_row = row;
-        self.cursor_col = col;
-        self.bump();
+    fn ensure_cursor_visible(&mut self, settings: &EditorSettings, view_height: f32) {
+        let cursor_top    = self.cursor_row as f32 * settings.line_height();
+        let cursor_bottom = cursor_top + settings.line_height();
+        if cursor_top < self.scroll_y                       { self.scroll_y = cursor_top; }
+        else if cursor_bottom > self.scroll_y + view_height { self.scroll_y = cursor_bottom - view_height; }
+        self.scroll_y = self.scroll_y.clamp(0.0, self.scroll_max);
     }
 
-    fn insert_str(&mut self, s: &str) {
-        let row = self.cursor_row;
-        let bi  = self.char_to_byte(row, self.cursor_col);
-        self.lines[row].insert_str(bi, s);
-        self.cursor_col += s.chars().count();
-        self.bump();
+    fn click(&mut self, click_x: f32, click_y: f32, settings: &EditorSettings) {
+        if click_x < settings.gutter_width() { return; }
+        let row      = ((click_y + self.scroll_y) / settings.line_height()).floor() as usize;
+        let row      = row.min(self.lines.len().saturating_sub(1));
+        let column_f = ((click_x - settings.text_start_x()) / settings.char_width()).round();
+        let column   = (if column_f < 0.0 { 0 } else { column_f as usize })
+                           .min(self.lines[row].chars().count());
+        self.cursor_row    = row;
+        self.cursor_column = column;
+        self.bump_snap();
+    }
+
+    fn insert_str(&mut self, text: &str) {
+        let row        = self.cursor_row;
+        let byte_index = self.char_to_byte(row, self.cursor_column);
+        self.lines[row].insert_str(byte_index, text);
+        self.cursor_column += text.chars().count();
+        self.bump_edit(row);
     }
 
     fn backspace(&mut self) {
-        if self.cursor_col > 0 {
-            let row   = self.cursor_row;
-            let start = self.char_to_byte(row, self.cursor_col - 1);
-            let end   = self.char_to_byte(row, self.cursor_col);
-            self.lines[row].drain(start..end);
-            self.cursor_col -= 1;
+        if self.cursor_column > 0 {
+            let row        = self.cursor_row;
+            let byte_start = self.char_to_byte(row, self.cursor_column - 1);
+            let byte_end   = self.char_to_byte(row, self.cursor_column);
+            self.lines[row].drain(byte_start..byte_end);
+            self.cursor_column -= 1;
+            self.bump_edit(row);
         } else if self.cursor_row > 0 {
-            let row      = self.cursor_row;
-            let line     = self.lines.remove(row);
-            let prev     = row - 1;
-            let prev_len = self.lines[prev].chars().count();
-            self.lines[prev].push_str(&line);
-            self.cursor_row = prev;
-            self.cursor_col = prev_len;
+            let row             = self.cursor_row;
+            let remainder       = self.lines.remove(row);
+            let previous_row    = row - 1;
+            let previous_length = self.lines[previous_row].chars().count();
+            self.lines[previous_row].push_str(&remainder);
+            self.cursor_row    = previous_row;
+            self.cursor_column = previous_length;
+            self.bump_structural();
         }
-        self.bump();
     }
 
     fn enter(&mut self) {
-        let row  = self.cursor_row;
-        let bi   = self.char_to_byte(row, self.cursor_col);
-        let rest = self.lines[row].split_off(bi);
-        self.cursor_row += 1;
-        self.cursor_col  = 0;
-        self.lines.insert(self.cursor_row, rest);
-        self.bump();
+        let row        = self.cursor_row;
+        let byte_index = self.char_to_byte(row, self.cursor_column);
+        let remainder  = self.lines[row].split_off(byte_index);
+        self.cursor_row    += 1;
+        self.cursor_column  = 0;
+        self.lines.insert(self.cursor_row, remainder);
+        self.bump_structural();
     }
 
     fn move_left(&mut self) {
-        if self.cursor_col > 0 { self.cursor_col -= 1; }
-        else if self.cursor_row > 0 {
-            self.cursor_row -= 1;
-            self.cursor_col  = self.lines[self.cursor_row].chars().count();
+        if self.cursor_column > 0 {
+            self.cursor_column -= 1;
+        } else if self.cursor_row > 0 {
+            self.cursor_row    -= 1;
+            self.cursor_column  = self.lines[self.cursor_row].chars().count();
         }
-        self.bump();
+        self.bump_snap();
     }
 
     fn move_right(&mut self) {
-        let len = self.lines[self.cursor_row].chars().count();
-        if self.cursor_col < len { self.cursor_col += 1; }
-        else if self.cursor_row < self.lines.len() - 1 {
-            self.cursor_row += 1; self.cursor_col = 0;
+        let line_length = self.lines[self.cursor_row].chars().count();
+        if self.cursor_column < line_length {
+            self.cursor_column += 1;
+        } else if self.cursor_row < self.lines.len() - 1 {
+            self.cursor_row    += 1;
+            self.cursor_column  = 0;
         }
-        self.bump();
+        self.bump_snap();
     }
 
     fn move_up(&mut self) {
-        if self.cursor_row > 0 { self.cursor_row -= 1; self.clamp_col(); }
-        self.bump();
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.clamp_column();
+        }
+        self.bump_snap();
     }
 
     fn move_down(&mut self) {
         if self.cursor_row < self.lines.len() - 1 {
-            self.cursor_row += 1; self.clamp_col();
+            self.cursor_row += 1;
+            self.clamp_column();
         }
-        self.bump();
+        self.bump_snap();
     }
 
-    fn char_to_byte(&self, row: usize, ci: usize) -> usize {
-        self.lines[row].char_indices().nth(ci).map(|(i, _)| i).unwrap_or(self.lines[row].len())
+    fn char_to_byte(&self, row: usize, char_index: usize) -> usize {
+        self.lines[row]
+            .char_indices()
+            .nth(char_index)
+            .map(|(byte_index, _)| byte_index)
+            .unwrap_or(self.lines[row].len())
     }
 
-    fn clamp_col(&mut self) {
-        self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].chars().count());
+    fn clamp_column(&mut self) {
+        self.cursor_column = self.cursor_column
+            .min(self.lines[self.cursor_row].chars().count());
     }
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
-
 pub struct App;
 
+const SOURCE_FILE: &str = "src/lib.rs";
+
 impl App {
-    pub fn new(ctx: &mut Context, assets: Assets) -> Scene {
-        let s = Rc::new(EditorSettings::default());
+    pub fn new(context: &mut Context, assets: Assets) -> Scene {
+        let settings = Shared::new(EditorSettings::default());
+        let state    = Shared::new(State::new(&settings.get()));
 
         let font_bytes = assets.get_font("JetBrainsMono-ExtraBold.ttf").expect("font");
         let font       = Font::from_bytes(&font_bytes).expect("invalid font");
 
-        let mut scene = Scene::new(ctx, CanvasMode::Fullscreen, 1);
-        let lid       = LayerId(0);
-        let (vw, vh)  = scene.get_virtual_size();
+        let mut scene    = Scene::new(context, CanvasMode::Fullscreen, 1);
+        let layer_id     = LayerId(0);
+        let (view_width, view_height) = scene.get_virtual_size();
+        let canvas       = scene.get_layer_mut(layer_id).unwrap().canvas_mut();
 
         {
-            let cv = scene.get_layer_mut(lid).unwrap().canvas_mut();
+            let s = settings.get();
+            add_rectangle(canvas, "bg",      0.0,                  0.0, view_width,                    view_height,     hex_to_color(&s.background),               "chrome");
+            add_rectangle(canvas, "gutter",  0.0,                  0.0, s.gutter_width(),               view_height,     hex_to_color(&s.background_gutter),        "chrome");
+            add_rectangle(canvas, "gut_sep", s.gutter_width()-1.0, 0.0, 1.0,                            view_height,     hex_to_color(&s.color_gutter_separator),   "chrome");
+            add_rectangle(canvas, "row_hl",  s.gutter_width(),      0.0, view_width - s.gutter_width(), s.line_height(), hex_to_color(&s.background_row_highlight), "chrome");
+            add_rectangle(canvas, "cursor",  s.text_start_x(),      0.0, s.cursor_width,                s.line_height(), hex_to_color(&s.color_cursor),             "chrome");
+        }
 
-            add_rect(cv, "bg",      0.0,                0.0, vw,                vh,         c(s.bg),          "chrome");
-            add_rect(cv, "gutter",  0.0,                0.0, s.gutter_w(),      vh,         c(s.bg_gutter),   "chrome");
-            add_rect(cv, "gut_sep", s.gutter_w() - 1.0, 0.0, 1.0,               vh,         c(s.col_gut_sep), "chrome");
-            add_rect(cv, "row_hl",  s.gutter_w(),       0.0, vw - s.gutter_w(), s.line_h(), c(s.bg_row_hl),   "chrome");
-            add_rect(cv, "cursor",  s.text_x(),         0.0, s.cursor_width,    s.line_h(), c(s.col_cursor),  "chrome");
+        canvas.watch_source(SOURCE_FILE, settings.clone());
 
-            for i in 0..s.vis_rows {
-                let y = i as f32 * s.line_h();
-                add_text_obj(cv, &format!("line_{}", i), s.text_x(), y,
-                    text_spec("", &font, c(s.col_text), s.font_size), s.line_h(), "line");
-                add_text_obj(cv, &format!("gnum_{}", i), s.num_pad_l, y,
-                    text_spec("", &font, c(s.col_lnum), s.font_size), s.line_h(), "gnum");
+        let state_for_key    = state.clone();
+        let settings_for_key = settings.clone();
+        canvas.on_key_press(move |_canvas, key| {
+            let tab_string        = settings_for_key.get().tab_string();
+            let mut current_state = state_for_key.get_mut();
+            match key {
+                Key::Named(NamedKey::Enter)      => current_state.enter(),
+                Key::Named(NamedKey::Delete)      => current_state.backspace(),
+                Key::Named(NamedKey::ArrowLeft)  => current_state.move_left(),
+                Key::Named(NamedKey::ArrowRight) => current_state.move_right(),
+                Key::Named(NamedKey::ArrowUp)    => current_state.move_up(),
+                Key::Named(NamedKey::ArrowDown)  => current_state.move_down(),
+                Key::Named(NamedKey::Tab)        => current_state.insert_str(&tab_string),
+                Key::Named(NamedKey::Space)      => current_state.insert_str(" "),
+                Key::Character(characters) => {
+                    if characters.as_str() == "\u{8}" || characters.as_str() == "\x7f" {
+                        current_state.backspace();
+                    } else if characters.chars().all(|c| !c.is_control()) {
+                        current_state.insert_str(characters.as_str());
+                    }
+                }
+                _ => {}
+            }
+        });
+
+        let state_for_click    = state.clone();
+        let settings_for_click = settings.clone();
+        canvas.on_mouse_press(move |_canvas, _button, (click_x, click_y)| {
+            state_for_click.get_mut().click(click_x, click_y, &settings_for_click.get());
+        });
+
+        let state_for_scroll    = state.clone();
+        let settings_for_scroll = settings.clone();
+        canvas.on_mouse_scroll(move |_canvas, (_delta_x, delta_y)| {
+            let speed = settings_for_scroll.get().scroll_speed;
+            let mut s = state_for_scroll.get_mut();
+            s.scroll_by(delta_y * speed);
+            s.start_render();
+        });
+
+        let font_for_tick     = font.clone();
+        let settings_for_tick = settings.clone();
+        canvas.on_update(move |canvas| {
+            let view_width  = canvas.get_virtual_size().0;
+            let view_height = canvas.get_virtual_size().1;
+
+            let size_changed = {
+                let s = state.get();
+                (view_width  - s.last_view_width ).abs() > 0.5
+                || (view_height - s.last_view_height).abs() > 0.5
+            };
+            if size_changed {
+                let mut s         = state.get_mut();
+                s.last_view_width  = view_width;
+                s.last_view_height = view_height;
             }
 
+            if settings_for_tick.changed() || size_changed {
+                rebuild_chrome(canvas, &settings_for_tick.get(), view_width, view_height);
+                state.get_mut().invalidate_all();
+            }
 
-        }
-
-        let state = Rc::new(RefCell::new(State::new(&s)));
-
-        {
-            let st_key = Rc::clone(&state);
-            let s_key  = Rc::clone(&s);
-            let cv     = scene.get_layer_mut(lid).unwrap().canvas_mut();
-
-            cv.on_key_press(move |_cv, key| {
-                let mut st = st_key.borrow_mut();
-                match key {
-                    Key::Named(NamedKey::Enter)      => st.enter(),
-                    Key::Named(NamedKey::Delete)     => st.backspace(),
-                    Key::Named(NamedKey::ArrowLeft)  => st.move_left(),
-                    Key::Named(NamedKey::ArrowRight) => st.move_right(),
-                    Key::Named(NamedKey::ArrowUp)    => st.move_up(),
-                    Key::Named(NamedKey::ArrowDown)  => st.move_down(),
-                    Key::Named(NamedKey::Tab)        => st.insert_str(&s_key.tab_str()),
-                    Key::Named(NamedKey::Space)      => st.insert_str(" "),
-                    Key::Character(s) => {
-                        if s.as_str() == "\u{8}" || s.as_str() == "\x7f" {
-                            st.backspace();
-                        } else if s.chars().all(|ch| !ch.is_control()) {
-                            st.insert_str(s.as_str());
-                        }
-                    }
-                    _ => {}
+            {
+                let current_settings  = settings_for_tick.get();
+                let mut current_state = state.get_mut();
+                current_state.update_scroll_max(&current_settings, view_height);
+                if current_state.snap_cursor {
+                    current_state.ensure_cursor_visible(&current_settings, view_height);
+                    current_state.snap_cursor = false;
+                    current_state.start_render();
                 }
-            });
-        }
+            }
 
-        {
-            let st_click = Rc::clone(&state);
-            let s_click  = Rc::clone(&s);
-            let cv       = scene.get_layer_mut(lid).unwrap().canvas_mut();
+            // ── detect dirty flags ────────────────────────────────────────────
+            let (scroll, cursor_row, cursor_column, content_dirty, scroll_dirty, cursor_dirty, edited_row) = {
+                let mut s         = state.get_mut();
+                let scroll        = s.scroll_y;
+                let content_dirty = s.revision     != s.last_revision;
+                let scroll_dirty  = (scroll - s.last_scroll).abs() > 0.01;
+                let cursor_dirty  = s.cursor_row    != s.last_cursor_row
+                                 || s.cursor_column != s.last_cursor_column;
 
-            cv.on_mouse_press(move |_cv, _btn, (vx, vy)| {
-                st_click.borrow_mut().click(vx, vy, &s_click);
-            });
-        }
-
-        {
-            let st_scroll = Rc::clone(&state);
-            let s_scroll  = Rc::clone(&s);
-            let cv        = scene.get_layer_mut(lid).unwrap().canvas_mut();
-
-            cv.on_mouse_scroll(move |_cv, (_dx, dy)| {
-                st_scroll.borrow_mut().scroll_by(dy * s_scroll.scroll_speed);
-            });
-        }
-
-        {
-            let font_tick = font.clone();
-            let s_tick    = Rc::clone(&s);
-            let cv        = scene.get_layer_mut(lid).unwrap().canvas_mut();
-
-            cv.on_update(move |cv| {
-                let s = &*s_tick;
-                let (vw, vh) = cv.get_virtual_size();
-
-                // Reset per-frame perf counters
-                let frame_start = Instant::now();
-                let mut set_pos_calls:     u32 = 0;
-                let mut update_text_calls: u32 = 0;
-
-                let (scroll, cursor_row, cursor_col, content_dirty, scroll_changed, cursor_moved) = {
-                    let mut st = state.borrow_mut();
-                    st.update_scroll_max(s, vh);
-
-                    let scroll         = st.scroll_y;
-                    let scroll_changed = (scroll - st.last_scroll).abs() > 0.01;
-                    let content_dirty  = st.revision != st.last_rev;
-                    let cursor_moved   = st.cursor_row != st.last_cursor_row
-                                      || st.cursor_col != st.last_cursor_col;
-
-                    if content_dirty || scroll_changed || cursor_moved {
-                        st.last_rev        = st.revision;
-                        st.last_scroll     = scroll;
-                        st.last_cursor_row = st.cursor_row;
-                        st.last_cursor_col = st.cursor_col;
-                    }
-
-                    (scroll, st.cursor_row, st.cursor_col, content_dirty, scroll_changed, cursor_moved)
-                };
-
-                if !content_dirty && !scroll_changed && !cursor_moved { return; }
-
-                let new_first  = (scroll / s.line_h()).floor() as usize;
-                let sub_y      = scroll % s.line_h();
-                let text_y_pad = (s.line_h() - s.font_size) * 0.35;
-                let total      = state.borrow().lines.len();
-                let old_first  = state.borrow().first_row;
-
-                // ── POSITION ─────────────────────────────────────────────────
-                // sub_y is global — one check covers all 60 slots.
-                let last_sub_y = state.borrow().slots[0].sub_y;
-                if (scroll_changed || content_dirty) && (last_sub_y - sub_y).abs() > 0.01 {
-                    for slot_i in 0..s.vis_rows {
-                        let screen_y  = slot_i as f32 * s.line_h() - sub_y;
-                        let text_y    = screen_y + text_y_pad;
-                        let gnum_str  = state.borrow().slots[slot_i].gnum.clone();
-                        let line_name = state.borrow().line_names[slot_i].clone();
-                        let gnum_name = state.borrow().gnum_names[slot_i].clone();
-                        set_pos(cv, &line_name, s.text_x(), text_y);
-                        set_pos(cv, &gnum_name, gnum_x(&gnum_str, s), text_y);
-                        set_pos_calls += 2;
-                        state.borrow_mut().slots[slot_i].sub_y = sub_y;
-                    }
+                if content_dirty || scroll_dirty || cursor_dirty {
+                    s.last_revision      = s.revision;
+                    s.last_scroll        = scroll;
+                    s.last_cursor_row    = s.cursor_row;
+                    s.last_cursor_column = s.cursor_column;
+                    // kick off a fresh render pass
+                    s.render_slot   = 0;
+                    s.pending_render = true;
                 }
 
-                // ── TEXT ─────────────────────────────────────────────────────
-                // Each update_text costs ~1ms (text layout). Cap at 8 per frame
-                // so scroll never blocks longer than ~8ms. Remaining dirty slots
-                // update on the next frame.
-                const MAX_TEXT_PER_FRAME: usize = 8;
-                let mut text_budget = MAX_TEXT_PER_FRAME;
+                let edited_row = s.last_edited_row.take();
+                (scroll, s.cursor_row, s.cursor_column, content_dirty, scroll_dirty, cursor_dirty, edited_row)
+            };
 
-                if new_first != old_first || content_dirty || cursor_moved {
-                    state.borrow_mut().first_row = new_first;
-
-                    for slot_i in 0..s.vis_rows {
-                        if text_budget == 0 { break; }
-
-                        let doc_row = new_first + slot_i;
-                        let exists  = doc_row < total;
-                        let is_cur  = doc_row == cursor_row;
-
-                        let (prev_doc, prev_cur) = {
-                            let st = state.borrow();
-                            (st.slots[slot_i].doc_row, st.slots[slot_i].is_cur)
-                        };
-
-                        let reassigned = prev_doc != if exists { Some(doc_row) } else { None };
-
-                        if reassigned || content_dirty {
-                            let new_text = if exists { state.borrow().lines[doc_row].clone() } else { String::new() };
-                            let new_gnum = if exists { format!("{}", doc_row + 1) } else { String::new() };
-                            let (prev_text, prev_gnum) = {
-                                let st = state.borrow();
-                                (st.slots[slot_i].text.clone(), st.slots[slot_i].gnum.clone())
-                            };
-
-                            if new_text != prev_text && text_budget > 0 {
-                                let name = state.borrow().line_names[slot_i].clone();
-                                update_text(cv, &name,
-                                    text_spec(&new_text, &font_tick, c(s.col_text), s.font_size));
-                                update_text_calls += 1;
-                                text_budget -= 1;
-                            }
-                            if (new_gnum != prev_gnum || is_cur != prev_cur) && text_budget > 0 {
-                                let col  = if is_cur { c(s.col_lnum_act) } else { c(s.col_lnum) };
-                                let name = state.borrow().gnum_names[slot_i].clone();
-                                update_text(cv, &name,
-                                    text_spec(&new_gnum, &font_tick, col, s.font_size));
-                                update_text_calls += 1;
-                                text_budget -= 1;
-                            }
-
-                            let mut st = state.borrow_mut();
-                            st.slots[slot_i].doc_row = if exists { Some(doc_row) } else { None };
-                            st.slots[slot_i].text    = new_text;
-                            st.slots[slot_i].gnum    = new_gnum;
-                            st.slots[slot_i].is_cur  = is_cur;
-                            st.slots[slot_i].sub_y   = f32::MAX;
-
-                        } else if cursor_moved && is_cur != prev_cur && text_budget > 0 {
-                            let gnum_str = state.borrow().slots[slot_i].gnum.clone();
-                            let name     = state.borrow().gnum_names[slot_i].clone();
-                            let col      = if is_cur { c(s.col_lnum_act) } else { c(s.col_lnum) };
-                            update_text(cv, &name,
-                                text_spec(&gnum_str, &font_tick, col, s.font_size));
-                            update_text_calls += 1;
-                            text_budget -= 1;
-                            state.borrow_mut().slots[slot_i].is_cur = is_cur;
-                        }
-                    }
-                }
-
-                // ── Cursor and row highlight ──────────────────────────────────
-                let cur_screen_y = cursor_row as f32 * s.line_h() - scroll;
-                set_bounds(cv, "row_hl", s.gutter_w(), cur_screen_y, vw - s.gutter_w(), s.line_h());
-                let cur_x = s.text_x() + cursor_col as f32 * s.char_w();
-                set_bounds(cv, "cursor", cur_x, cur_screen_y, s.cursor_width, s.line_h());
-
-                // ── Perf print ────────────────────────────────────────────────
-                let elapsed_us = frame_start.elapsed().as_micros();
-                println!(
-                    "{:.2}ms | set_pos:{} update_text:{}",
-                    elapsed_us as f32 / 1000.0,
-                    set_pos_calls,
-                    update_text_calls,
+            // ── process one text slot this tick if work is pending ────────────
+            if state.get().pending_render {
+                let slot_count = state.get().line_names.len();
+                text::update_text_slots(
+                    canvas, &state, &settings_for_tick.get(), &font_for_tick,
+                    scroll, cursor_row,
+                    content_dirty, scroll_dirty, edited_row,
                 );
-            });
-        }
+                if state.get().render_slot >= slot_count {
+                    state.get_mut().pending_render = false;
+                }
+            } else {
+                return;
+            }
+
+            // ── cursor and row-highlight rects ────────────────────────────────
+            let cursor_screen_y = cursor_row as f32 * settings_for_tick.get().line_height() - scroll;
+            let is_visible      = cursor_screen_y > -settings_for_tick.get().line_height()
+                                && cursor_screen_y < view_height;
+            let draw_y          = if is_visible { cursor_screen_y } else { -settings_for_tick.get().line_height() * 2.0 };
+
+            set_bounds(canvas, "row_hl",
+                settings_for_tick.get().gutter_width(),
+                draw_y,
+                view_width - settings_for_tick.get().gutter_width(),
+                settings_for_tick.get().line_height(),
+            );
+
+            let cursor_x = settings_for_tick.get().text_start_x()
+                + cursor_column as f32 * settings_for_tick.get().char_width();
+            set_bounds(canvas, "cursor",
+                cursor_x,
+                draw_y,
+                settings_for_tick.get().cursor_width,
+                settings_for_tick.get().line_height(),
+            );
+        });
 
         scene
     }
 }
 
-ramp::run! { |ctx: &mut Context, assets: Assets| {
-    App::new(ctx, assets)
+ramp::run! { |context: &mut Context, assets: Assets| {
+    App::new(context, assets)
 }}
