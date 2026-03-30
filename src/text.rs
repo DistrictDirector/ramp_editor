@@ -25,20 +25,16 @@ pub fn update_text_object(canvas: &mut Canvas, name: &str, spec: TextSpec) {
     }
 }
 
-// Physical slot for a given document row.
-// Slot p permanently owns all doc rows where row % slot_count == p.
 #[inline]
 fn doc_to_slot(doc_row: usize, slot_count: usize) -> usize {
     doc_row % slot_count
 }
 
-// Visual position (0 = top) of a physical slot given the current first_row.
 #[inline]
 fn slot_logical(phys: usize, first_row: usize, slot_count: usize) -> usize {
     (phys + slot_count - first_row % slot_count) % slot_count
 }
 
-// Rebuild content for one physical slot showing the given document row.
 fn rebuild_slot(
     canvas:      &mut Canvas,
     state:       &Shared<State>,
@@ -87,7 +83,6 @@ pub fn update_text_slots(
     let slot_count     = state.get().line_names.len();
     let old_first_row  = state.get().first_row;
 
-    // ── Recycle slots that scrolled into view ────────────────────────────────
     if scroll_dirty && new_first_row != old_first_row && old_first_row != usize::MAX {
         let raw_delta = new_first_row as i64 - old_first_row as i64;
         let delta     = raw_delta.unsigned_abs() as usize;
@@ -116,7 +111,6 @@ pub fn update_text_slots(
 
     state.get_mut().first_row = new_first_row;
 
-    // ── Reposition all slots (position only, no content) ─────────────────────
     if scroll_dirty || cursor_dirty {
         for slot_index in 0..slot_count {
             let logical    = slot_logical(slot_index, new_first_row, slot_count);
@@ -131,7 +125,6 @@ pub fn update_text_slots(
         }
     }
 
-    // ── Cursor highlight ──────────────────────────────────────────────────────
     if cursor_dirty {
         let prev_active_slot = state.get().cached_gutter_number_is_current
             .iter()
@@ -170,10 +163,6 @@ pub fn update_text_slots(
         }
     }
 
-    // ── Structural gutter number update — ALL slots, once per structural edit ──
-    // When lines are inserted or deleted, every visible line number may have
-    // shifted. Flush all gutter numbers in one pass on the first tick only,
-    // then set the flag so subsequent ticks of the amortised loop skip this.
     let is_structural = content_dirty && edited_row.is_none();
     if is_structural && !state.get().render_gutters_flushed {
         for slot_index in 0..slot_count {
@@ -194,8 +183,6 @@ pub fn update_text_slots(
         state.get_mut().render_gutters_flushed = true;
     }
 
-    // ── Per-slot render: line text content (amortised one slot per tick) ──────
-    // Gutter numbers for structural edits are handled in the flush above.
     let first_slot = state.get().render_slot;
     if first_slot >= slot_count { return; }
 
