@@ -16,8 +16,8 @@ struct EditorSettings {
     gutter_columns:           f32,
     cursor_width:             f32,
     scroll_speed:             f32,
+    scroll_speed_max:         f32,
     tab_size:                 usize,
-    visible_rows:             usize,
     background:               String,
     background_gutter:        String,
     background_row_highlight: String,
@@ -32,23 +32,28 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             font_size:                16.0,
-            line_height_ratio:        1.4,
-            char_width_ratio:         0.6,
-            number_padding_left:      4.0,
+            line_height_ratio:        1.5,
+            char_width_ratio:         0.56,
+            number_padding_left:      8.0,
             number_padding_right:     18.0,
             gutter_columns:           4.0,
             cursor_width:             2.0,
             scroll_speed:             1.0,
+            scroll_speed_max:         50.0,
             tab_size:                 4,
-            visible_rows:             60,
-            background:               "#1e1e2e".into(),
-            background_gutter:        "#181825".into(),
-            background_row_highlight: "#2a2a3d".into(),
-            color_text:               "#cdd6f4".into(),
-            color_line_number:        "#45475a".into(),
-            color_line_number_active: "#cba6f7".into(),
-            color_cursor:             "#cba6f7".into(),
-            color_gutter_separator:   "#ffffff".into(),
+
+            background:               "#12101a".into(),
+            background_gutter:        "#1a1726".into(),
+            background_row_highlight: "#221e30".into(),
+
+            color_text:               "#e2dff0".into(),
+
+            color_line_number:        "#6b6580".into(),
+            color_line_number_active: "#c9b8ff".into(),
+
+            color_cursor:             "#9d6bff".into(),
+
+            color_gutter_separator:   "#2a2540".into(),
         }
     }
 }
@@ -57,24 +62,24 @@ impl FromSource for EditorSettings {
     fn from_source(source_params: &SourceSettings) -> Self {
         let defaults = Self::default();
         Self {
-            font_size:                source_params.f32("font_size")    .unwrap_or(defaults.font_size),
-            line_height_ratio:        source_params.f32("line_height")  .unwrap_or(defaults.line_height_ratio),
-            char_width_ratio:         source_params.f32("char_width")   .unwrap_or(defaults.char_width_ratio),
-            number_padding_left:      source_params.f32("num_pad_l")    .unwrap_or(defaults.number_padding_left),
-            number_padding_right:     source_params.f32("num_pad_r")    .unwrap_or(defaults.number_padding_right),
-            gutter_columns:           source_params.f32("gutter_cols")  .unwrap_or(defaults.gutter_columns),
-            cursor_width:             source_params.f32("cursor_width") .unwrap_or(defaults.cursor_width),
-            scroll_speed:             source_params.f32("scroll_speed") .unwrap_or(defaults.scroll_speed),
-            tab_size:                 source_params.usize("tab_size")   .unwrap_or(defaults.tab_size),
-            visible_rows:             defaults.visible_rows,
-            background:               source_params.str("bg")           .unwrap_or(defaults.background),
-            background_gutter:        source_params.str("bg_gutter")    .unwrap_or(defaults.background_gutter),
-            background_row_highlight: source_params.str("bg_row_hl")    .unwrap_or(defaults.background_row_highlight),
-            color_text:               source_params.str("col_text")     .unwrap_or(defaults.color_text),
-            color_line_number:        source_params.str("col_lnum")     .unwrap_or(defaults.color_line_number),
-            color_line_number_active: source_params.str("col_lnum_act") .unwrap_or(defaults.color_line_number_active),
-            color_cursor:             source_params.str("col_cursor")   .unwrap_or(defaults.color_cursor),
-            color_gutter_separator:   source_params.str("col_gut_sep")  .unwrap_or(defaults.color_gutter_separator),
+            font_size:                source_params.f32("font_size")                .unwrap_or(defaults.font_size),
+            line_height_ratio:        source_params.f32("line_height_ratio")        .unwrap_or(defaults.line_height_ratio),
+            char_width_ratio:         source_params.f32("char_width_ratio")         .unwrap_or(defaults.char_width_ratio),
+            number_padding_left:      source_params.f32("number_padding_left")      .unwrap_or(defaults.number_padding_left),
+            number_padding_right:     source_params.f32("number_padding_right")     .unwrap_or(defaults.number_padding_right),
+            gutter_columns:           source_params.f32("gutter_columns")           .unwrap_or(defaults.gutter_columns),
+            cursor_width:             source_params.f32("cursor_width")             .unwrap_or(defaults.cursor_width),
+            scroll_speed:             source_params.f32("scroll_speed")             .unwrap_or(defaults.scroll_speed),
+            scroll_speed_max:         source_params.f32("scroll_speed_max")         .unwrap_or(defaults.scroll_speed_max),
+            tab_size:                 source_params.usize("tab_size")               .unwrap_or(defaults.tab_size),
+            background:               source_params.str("background")               .unwrap_or(defaults.background),
+            background_gutter:        source_params.str("background_gutter")        .unwrap_or(defaults.background_gutter),
+            background_row_highlight: source_params.str("background_row_highlight") .unwrap_or(defaults.background_row_highlight),
+            color_text:               source_params.str("color_text")               .unwrap_or(defaults.color_text),
+            color_line_number:        source_params.str("color_line_number")        .unwrap_or(defaults.color_line_number),
+            color_line_number_active: source_params.str("color_line_number_active") .unwrap_or(defaults.color_line_number_active),
+            color_cursor:             source_params.str("color_cursor")             .unwrap_or(defaults.color_cursor),
+            color_gutter_separator:   source_params.str("color_gutter_separator")   .unwrap_or(defaults.color_gutter_separator),
         }
     }
 }
@@ -85,8 +90,21 @@ impl EditorSettings {
     fn gutter_width(&self) -> f32    { self.char_width() * self.gutter_columns + self.number_padding_left + self.number_padding_right }
     fn text_start_x(&self) -> f32    { self.gutter_width() }
     fn tab_string(&self)   -> String { " ".repeat(self.tab_size) }
+
+    /// Gutter width that grows with the line count — always at least `gutter_columns` wide.
+    fn gutter_width_for(&self, line_count: usize) -> f32 {
+        let digit_cols = if line_count == 0 { 1.0 }
+                         else { (line_count as f32).log10().floor() + 1.0 };
+        let cols = digit_cols.max(self.gutter_columns);
+        self.char_width() * cols + self.number_padding_left + self.number_padding_right
+    }
+    fn text_start_x_for(&self, line_count: usize) -> f32 { self.gutter_width_for(line_count) }
 }
 
+/// How many render slots are needed to fill the viewport (plus one extra for partial rows).
+fn needed_slots(view_height: f32, line_height: f32) -> usize {
+    (view_height / line_height).ceil() as usize + 16
+}
 
 pub(crate) fn hex_to_color(hex: &str) -> Color {
     let trimmed = hex.trim_start_matches('#');
@@ -137,7 +155,8 @@ fn set_bounds(canvas: &mut Canvas, name: &str, x: f32, y: f32, width: f32, heigh
     }
 }
 
-fn rebuild_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f32, view_height: f32) {
+fn rebuild_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f32, view_height: f32, line_count: usize) {
+    let gw = settings.gutter_width_for(line_count);
     let mut update = |name: &str, x: f32, y: f32, width: f32, height: f32, color: Color| {
         if let Some(object) = canvas.get_game_object_mut(name) {
             object.position = (x, y);
@@ -146,11 +165,58 @@ fn rebuild_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f3
         }
     };
 
-    update("bg",      0.0,                           0.0, view_width,                            view_height,            hex_to_color(&settings.background));
-    update("gutter",  0.0,                           0.0, settings.gutter_width(),               view_height,            hex_to_color(&settings.background_gutter));
-    update("gut_sep", settings.gutter_width() - 1.0, 0.0, 1.0,                                   view_height,            hex_to_color(&settings.color_gutter_separator));
-    update("row_hl",  settings.gutter_width(),        0.0, view_width - settings.gutter_width(),  settings.line_height(), hex_to_color(&settings.background_row_highlight));
-    update("cursor",  settings.text_start_x(),        0.0, settings.cursor_width,                settings.line_height(), hex_to_color(&settings.color_cursor));
+    update("bg",      0.0,        0.0, view_width,           view_height,            hex_to_color(&settings.background));
+    update("gutter",  0.0,        0.0, gw,                   view_height,            hex_to_color(&settings.background_gutter));
+    update("gut_sep", gw - 1.0,   0.0, 1.0,                  view_height,            hex_to_color(&settings.color_gutter_separator));
+    update("row_hl",  gw,         0.0, view_width - gw,       settings.line_height(), hex_to_color(&settings.background_row_highlight));
+    update("cursor",  gw,         0.0, settings.cursor_width, settings.line_height(), hex_to_color(&settings.color_cursor));
+}
+
+/// Grow the slot pool to cover the current viewport.
+/// Only ever adds slots — never removes them (extras sit off-screen at y = -line_height * 2).
+fn ensure_slots(
+    canvas:      &mut Canvas,
+    state:       &Shared<State>,
+    settings:    &EditorSettings,
+    font:        &Font,
+    view_height: f32,
+) {
+    let needed  = needed_slots(view_height, settings.line_height());
+    let current = state.get().line_names.len();
+    if needed <= current { return; }
+
+    let line_count = state.get().lines.len();
+
+    for slot_index in current..needed {
+        // Line text slot
+        let line_name = format!("line_{}", slot_index);
+        let line_spec = text::create_text_spec("", font, hex_to_color(&settings.color_text), settings.font_size);
+        let mut line_obj = GameObject::build(&line_name)
+            .position(settings.text_start_x_for(line_count), 0.0)
+            .size(4.0, settings.line_height())
+            .tag("line")
+            .finish();
+        line_obj.set_text(line_spec);
+        canvas.add_game_object(line_name.clone(), line_obj);
+
+        // Gutter number slot
+        let gutter_name = format!("gnum_{}", slot_index);
+        let gutter_spec = text::create_text_spec("", font, hex_to_color(&settings.color_line_number), settings.font_size);
+        let mut gutter_obj = GameObject::build(&gutter_name)
+            .position(settings.number_padding_left, 0.0)
+            .size(4.0, settings.line_height())
+            .tag("gnum")
+            .finish();
+        gutter_obj.set_text(gutter_spec);
+        canvas.add_game_object(gutter_name, gutter_obj);
+
+        state.get_mut().line_names.push(line_name);
+        state.get_mut().cached_line_text.push(String::new());
+        state.get_mut().cached_gutter_number_is_current.push(false);
+    }
+
+    // Force a full content + position rebuild so new slots are populated.
+    state.get_mut().invalidate_all();
 }
 
 struct State {
@@ -166,22 +232,23 @@ struct State {
     last_cursor_row:                 usize,
     last_cursor_column:              usize,
     line_names:                      Vec<String>,
-    gutter_number_names:             Vec<String>,
     snap_cursor:                     bool,
     last_edited_row:                 Option<usize>,
     cached_line_text:                Vec<String>,
-    cached_gutter_number_text:       Vec<String>,
     cached_gutter_number_is_current: Vec<bool>,
     last_view_width:                 f32,
     last_view_height:                f32,
     render_slot:                     usize,
     pending_render:                  bool,
+    render_content_dirty:            bool,
+    render_edited_row:               Option<usize>,
+    render_gutters_flushed:          bool,
+    last_line_count:                 usize,
 }
 
 impl State {
-    fn new(settings: &EditorSettings) -> Self {
-        let line_names          = (0..settings.visible_rows).map(|i| format!("line_{}", i)).collect();
-        let gutter_number_names = (0..settings.visible_rows).map(|i| format!("gnum_{}", i)).collect();
+    fn new(slot_count: usize) -> Self {
+        let line_names = (0..slot_count).map(|i| format!("line_{}", i)).collect();
         Self {
             lines:                           vec![String::new()],
             cursor_row:                      0,
@@ -195,32 +262,33 @@ impl State {
             last_cursor_row:                 usize::MAX,
             last_cursor_column:              usize::MAX,
             line_names,
-            gutter_number_names,
             snap_cursor:                     false,
             last_edited_row:                 None,
-            cached_line_text:                vec![String::new(); settings.visible_rows],
-            cached_gutter_number_text:       vec![String::new(); settings.visible_rows],
-            cached_gutter_number_is_current: vec![false;         settings.visible_rows],
+            cached_line_text:                vec![String::new(); slot_count],
+            cached_gutter_number_is_current: vec![false;         slot_count],
             last_view_width:                 0.0,
             last_view_height:                0.0,
             render_slot:                     0,
             pending_render:                  false,
+            render_content_dirty:            false,
+            render_edited_row:               None,
+            render_gutters_flushed:          true,
+            last_line_count:                 1,
         }
     }
 
     fn bump(&mut self)                  { self.revision = self.revision.wrapping_add(1); }
     fn bump_snap(&mut self)             { self.bump(); self.snap_cursor = true; }
     fn bump_edit(&mut self, row: usize) { self.last_edited_row = Some(row); self.start_render(); self.bump_snap(); }
-    fn bump_structural(&mut self)       { self.last_edited_row = None;      self.start_render(); self.bump_snap(); }
+    fn bump_structural(&mut self) { self.last_edited_row = None; self.render_gutters_flushed = false; self.start_render(); self.bump_snap(); }
 
     fn start_render(&mut self) {
-        self.render_slot   = 0;
+        self.render_slot    = 0;
         self.pending_render = true;
     }
 
     fn invalidate_all(&mut self) {
         self.cached_line_text.iter_mut().for_each(|t| t.clear());
-        self.cached_gutter_number_text.iter_mut().for_each(|t| t.clear());
         self.cached_gutter_number_is_current.iter_mut().for_each(|f| *f = false);
         self.first_row   = usize::MAX;
         self.last_scroll = f32::MAX;
@@ -234,8 +302,9 @@ impl State {
         self.scroll_y      = self.scroll_y.clamp(0.0, self.scroll_max);
     }
 
-    fn scroll_by(&mut self, delta: f32) {
-        self.scroll_y = (self.scroll_y + delta).clamp(0.0, self.scroll_max);
+    fn scroll_by(&mut self, delta: f32, speed_max: f32) {
+        let clamped_delta = delta.clamp(-speed_max, speed_max);
+        self.scroll_y = (self.scroll_y + clamped_delta).clamp(0.0, self.scroll_max);
     }
 
     fn ensure_cursor_visible(&mut self, settings: &EditorSettings, view_height: f32) {
@@ -247,10 +316,11 @@ impl State {
     }
 
     fn click(&mut self, click_x: f32, click_y: f32, settings: &EditorSettings) {
-        if click_x < settings.gutter_width() { return; }
+        let line_count = self.lines.len();
+        if click_x < settings.gutter_width_for(line_count) { return; }
         let row      = ((click_y + self.scroll_y) / settings.line_height()).floor() as usize;
         let row      = row.min(self.lines.len().saturating_sub(1));
-        let column_f = ((click_x - settings.text_start_x()) / settings.char_width()).round();
+        let column_f = ((click_x - settings.text_start_x_for(line_count)) / settings.char_width()).round();
         let column   = (if column_f < 0.0 { 0 } else { column_f as usize })
                            .min(self.lines[row].chars().count());
         self.cursor_row    = row;
@@ -354,7 +424,6 @@ const SOURCE_FILE: &str = "src/lib.rs";
 impl App {
     pub fn new(context: &mut Context, assets: Assets) -> Scene {
         let settings = Shared::new(EditorSettings::default());
-        let state    = Shared::new(State::new(&settings.get()));
 
         let font_bytes = assets.get_font("JetBrainsMono-ExtraBold.ttf").expect("font");
         let font       = Font::from_bytes(&font_bytes).expect("invalid font");
@@ -364,13 +433,42 @@ impl App {
         let (view_width, view_height) = scene.get_virtual_size();
         let canvas       = scene.get_layer_mut(layer_id).unwrap().canvas_mut();
 
+        // Compute initial slot count from the actual viewport size.
+        let initial_slots = needed_slots(view_height, settings.get().line_height());
+        let state         = Shared::new(State::new(initial_slots));
+
         {
-            let s = settings.get();
-            add_rectangle(canvas, "bg",      0.0,                  0.0, view_width,                    view_height,     hex_to_color(&s.background),               "chrome");
-            add_rectangle(canvas, "gutter",  0.0,                  0.0, s.gutter_width(),               view_height,     hex_to_color(&s.background_gutter),        "chrome");
-            add_rectangle(canvas, "gut_sep", s.gutter_width()-1.0, 0.0, 1.0,                            view_height,     hex_to_color(&s.color_gutter_separator),   "chrome");
-            add_rectangle(canvas, "row_hl",  s.gutter_width(),      0.0, view_width - s.gutter_width(), s.line_height(), hex_to_color(&s.background_row_highlight), "chrome");
-            add_rectangle(canvas, "cursor",  s.text_start_x(),      0.0, s.cursor_width,                s.line_height(), hex_to_color(&s.color_cursor),             "chrome");
+            let s  = settings.get();
+            let gw = s.gutter_width_for(1);
+            add_rectangle(canvas, "bg",      0.0,        0.0, view_width,           view_height,     hex_to_color(&s.background),               "chrome");
+            add_rectangle(canvas, "gutter",  0.0,        0.0, gw,                   view_height,     hex_to_color(&s.background_gutter),        "chrome");
+            add_rectangle(canvas, "gut_sep", gw - 1.0,   0.0, 1.0,                  view_height,     hex_to_color(&s.color_gutter_separator),   "chrome");
+            add_rectangle(canvas, "row_hl",  gw,         0.0, view_width - gw,       s.line_height(), hex_to_color(&s.background_row_highlight), "chrome");
+            add_rectangle(canvas, "cursor",  gw,         0.0, s.cursor_width,        s.line_height(), hex_to_color(&s.color_cursor),             "chrome");
+
+            for slot_index in 0..initial_slots {
+                let text_y = slot_index as f32 * s.line_height();
+
+                let line_name = format!("line_{}", slot_index);
+                let line_spec = text::create_text_spec("", &font, hex_to_color(&s.color_text), s.font_size);
+                let mut line_obj = GameObject::build(&line_name)
+                    .position(s.text_start_x_for(1), text_y)
+                    .size(4.0, s.line_height())
+                    .tag("line")
+                    .finish();
+                line_obj.set_text(line_spec);
+                canvas.add_game_object(line_name, line_obj);
+
+                let gutter_name = format!("gnum_{}", slot_index);
+                let gutter_spec = text::create_text_spec("", &font, hex_to_color(&s.color_line_number), s.font_size);
+                let mut gutter_obj = GameObject::build(&gutter_name)
+                    .position(s.number_padding_left, text_y)
+                    .size(4.0, s.line_height())
+                    .tag("gnum")
+                    .finish();
+                gutter_obj.set_text(gutter_spec);
+                canvas.add_game_object(gutter_name, gutter_obj);
+            }
         }
 
         canvas.watch_source(SOURCE_FILE, settings.clone());
@@ -409,10 +507,9 @@ impl App {
         let state_for_scroll    = state.clone();
         let settings_for_scroll = settings.clone();
         canvas.on_mouse_scroll(move |_canvas, (_delta_x, delta_y)| {
-            let speed = settings_for_scroll.get().scroll_speed;
-            let mut s = state_for_scroll.get_mut();
-            s.scroll_by(delta_y * speed);
-            s.start_render();
+            let s     = settings_for_scroll.get();
+            let delta = delta_y * s.scroll_speed;
+            state_for_scroll.get_mut().scroll_by(delta, s.scroll_speed_max);
         });
 
         let font_for_tick     = font.clone();
@@ -432,8 +529,19 @@ impl App {
                 s.last_view_height = view_height;
             }
 
-            if settings_for_tick.changed() || size_changed {
-                rebuild_chrome(canvas, &settings_for_tick.get(), view_width, view_height);
+            // Consume the changed flag exactly once — calling it twice resets it
+            // after the first call, so the second check would always see false.
+            let settings_changed = settings_for_tick.changed();
+
+            if size_changed || settings_changed {
+                ensure_slots(canvas, &state, &settings_for_tick.get(), &font_for_tick, view_height);
+            }
+
+            let line_count         = state.get().lines.len();
+            let line_count_changed = line_count != state.get().last_line_count;
+            if settings_changed || size_changed || line_count_changed {
+                rebuild_chrome(canvas, &settings_for_tick.get(), view_width, view_height, line_count);
+                state.get_mut().last_line_count = line_count;
                 state.get_mut().invalidate_all();
             }
 
@@ -448,64 +556,71 @@ impl App {
                 }
             }
 
-            // ── detect dirty flags ────────────────────────────────────────────
             let (scroll, cursor_row, cursor_column, content_dirty, scroll_dirty, cursor_dirty, edited_row) = {
                 let mut s         = state.get_mut();
                 let scroll        = s.scroll_y;
-                let content_dirty = s.revision     != s.last_revision;
+                let content_dirty = s.revision != s.last_revision;
                 let scroll_dirty  = (scroll - s.last_scroll).abs() > 0.01;
                 let cursor_dirty  = s.cursor_row    != s.last_cursor_row
-                                 || s.cursor_column != s.last_cursor_column;
+                                || s.cursor_column != s.last_cursor_column;
 
                 if content_dirty || scroll_dirty || cursor_dirty {
                     s.last_revision      = s.revision;
                     s.last_scroll        = scroll;
                     s.last_cursor_row    = s.cursor_row;
                     s.last_cursor_column = s.cursor_column;
-                    // kick off a fresh render pass
-                    s.render_slot   = 0;
-                    s.pending_render = true;
+                    if content_dirty {
+                        s.render_content_dirty = true;
+                        s.render_edited_row    = s.last_edited_row;
+                    }
+                    s.start_render();
                 }
+                s.last_edited_row = None;
 
-                let edited_row = s.last_edited_row.take();
-                (scroll, s.cursor_row, s.cursor_column, content_dirty, scroll_dirty, cursor_dirty, edited_row)
+                let render_content_dirty = s.render_content_dirty;
+                let render_edited_row    = s.render_edited_row;
+                (scroll, s.cursor_row, s.cursor_column, render_content_dirty, scroll_dirty, cursor_dirty, render_edited_row)
             };
 
-            // ── process one text slot this tick if work is pending ────────────
             if state.get().pending_render {
                 let slot_count = state.get().line_names.len();
                 text::update_text_slots(
                     canvas, &state, &settings_for_tick.get(), &font_for_tick,
                     scroll, cursor_row,
+                    cursor_dirty,
                     content_dirty, scroll_dirty, edited_row,
                 );
                 if state.get().render_slot >= slot_count {
-                    state.get_mut().pending_render = false;
+                    let mut s = state.get_mut();
+                    s.pending_render       = false;
+                    s.render_content_dirty = false;
+                    s.render_edited_row    = None;
                 }
             } else {
                 return;
             }
 
-            // ── cursor and row-highlight rects ────────────────────────────────
-            let cursor_screen_y = cursor_row as f32 * settings_for_tick.get().line_height() - scroll;
-            let is_visible      = cursor_screen_y > -settings_for_tick.get().line_height()
+            let s               = settings_for_tick.get();
+            let line_count      = state.get().lines.len();
+            let gw              = s.gutter_width_for(line_count);
+            let cursor_screen_y = cursor_row as f32 * s.line_height() - scroll;
+            let is_visible      = cursor_screen_y > -s.line_height()
                                 && cursor_screen_y < view_height;
-            let draw_y          = if is_visible { cursor_screen_y } else { -settings_for_tick.get().line_height() * 2.0 };
+            let draw_y          = if is_visible { cursor_screen_y } else { -s.line_height() * 2.0 };
 
             set_bounds(canvas, "row_hl",
-                settings_for_tick.get().gutter_width(),
+                gw,
                 draw_y,
-                view_width - settings_for_tick.get().gutter_width(),
-                settings_for_tick.get().line_height(),
+                view_width - gw,
+                s.line_height(),
             );
 
-            let cursor_x = settings_for_tick.get().text_start_x()
-                + cursor_column as f32 * settings_for_tick.get().char_width();
+            let cursor_x = gw + cursor_column as f32 * s.char_width();
             set_bounds(canvas, "cursor",
                 cursor_x,
                 draw_y,
-                settings_for_tick.get().cursor_width,
-                settings_for_tick.get().line_height(),
+                s.cursor_width,
+                s.line_height(),
             );
         });
 

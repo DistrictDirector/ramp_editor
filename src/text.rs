@@ -7,9 +7,9 @@ pub fn create_text_spec(text: &str, font: &Font, color: Color, font_size: f32) -
     make_text_aligned(text, font_size, font, color, Align::Left)
 }
 
-pub fn gutter_number_x(gutter_number: &str, settings: &EditorSettings) -> f32 {
+pub fn gutter_number_x(gutter_number: &str, settings: &EditorSettings, line_count: usize) -> f32 {
     let number_width = gutter_number.len() as f32 * settings.char_width();
-    (settings.gutter_width() - settings.number_padding_right - number_width)
+    (settings.gutter_width_for(line_count) - settings.number_padding_right - number_width)
         .max(settings.number_padding_left)
 }
 
@@ -25,6 +25,49 @@ pub fn update_text_object(canvas: &mut Canvas, name: &str, spec: TextSpec) {
     }
 }
 
+// Physical slot for a given document row.
+// Slot p permanently owns all doc rows where row % slot_count == p.
+#[inline]
+fn doc_to_slot(doc_row: usize, slot_count: usize) -> usize {
+    doc_row % slot_count
+}
+
+// Visual position (0 = top) of a physical slot given the current first_row.
+#[inline]
+fn slot_logical(phys: usize, first_row: usize, slot_count: usize) -> usize {
+    (phys + slot_count - first_row % slot_count) % slot_count
+}
+
+// Rebuild content for one physical slot showing the given document row.
+fn rebuild_slot(
+    canvas:      &mut Canvas,
+    state:       &Shared<State>,
+    settings:    &EditorSettings,
+    font:        &Font,
+    slot_index:  usize,
+    doc_row:     usize,
+    cursor_row:  usize,
+    total_lines: usize,
+) {
+    let row_exists    = doc_row < total_lines;
+    let line_text     = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
+    let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
+    let is_current    = doc_row == cursor_row;
+
+    let text_spec = create_text_spec(&line_text, font, hex_to_color(&settings.color_text), settings.font_size);
+    update_text_object(canvas, &format!("line_{}", slot_index), text_spec);
+    state.get_mut().cached_line_text[slot_index] = line_text;
+
+    let color = if is_current {
+        hex_to_color(&settings.color_line_number_active)
+    } else {
+        hex_to_color(&settings.color_line_number)
+    };
+    let gutter_spec = create_text_spec(&gutter_number, font, color, settings.font_size);
+    update_text_object(canvas, &format!("gnum_{}", slot_index), gutter_spec);
+    state.get_mut().cached_gutter_number_is_current[slot_index] = is_current;
+}
+
 pub fn update_text_slots(
     canvas:        &mut Canvas,
     state:         &Shared<State>,
@@ -32,6 +75,7 @@ pub fn update_text_slots(
     font:          &Font,
     scroll:        f32,
     cursor_row:    usize,
+    cursor_dirty:  bool,
     content_dirty: bool,
     scroll_dirty:  bool,
     edited_row:    Option<usize>,
@@ -41,121 +85,138 @@ pub fn update_text_slots(
     let text_y_padding = (settings.line_height() - settings.font_size) * 0.35;
     let total_lines    = state.get().lines.len();
     let slot_count     = state.get().line_names.len();
+    let old_first_row  = state.get().first_row;
 
-    let previous_first_row = state.get().first_row;
-    if scroll_dirty && new_first_row != previous_first_row {
-        let mut s = state.get_mut();
-        s.cached_line_text.iter_mut().for_each(|t| t.clear());
-        s.cached_gutter_number_text.iter_mut().for_each(|t| t.clear());
-        s.cached_gutter_number_is_current.iter_mut().for_each(|f| *f = false);
-        s.render_slot = 0;
-    }
-    state.get_mut().first_row = new_first_row;
+    // ── Recycle slots that scrolled into view ────────────────────────────────
+    if scroll_dirty && new_first_row != old_first_row && old_first_row != usize::MAX {
+        let raw_delta = new_first_row as i64 - old_first_row as i64;
+        let delta     = raw_delta.unsigned_abs() as usize;
 
-    let slot_index = state.get().render_slot;
-    if slot_index >= slot_count { return; }
-    state.get_mut().render_slot += 1;
-
-    let document_row = new_first_row + slot_index;
-    let row_exists   = document_row < total_lines;
-    let is_current   = document_row == cursor_row;
-
-    let new_gutter_number = if row_exists {
-        format!("{}", document_row + 1)
-    } else {
-        String::new()
-    };
-
-    let line_name   = state.get().line_names[slot_index].clone();
-    let gutter_name = state.get().gutter_number_names[slot_index].clone();
-    let screen_y    = slot_index as f32 * settings.line_height() - subpixel_y;
-    let text_y      = screen_y + text_y_padding;
-
-    // ── lazy-create line slot — track if just born ────────────────────────────
-    let line_just_created = canvas.get_game_object(&line_name).is_none();
-    if line_just_created {
-        let spec = create_text_spec(
-            "", font, hex_to_color(&settings.color_text), settings.font_size,
-        );
-        let mut object = GameObject::build(&line_name)
-            .position(settings.text_start_x(), text_y)
-            .size(4.0, settings.line_height())
-            .tag("line")
-            .finish();
-        object.set_text(spec);
-        canvas.add_game_object(line_name.clone(), object);
-    }
-
-    // ── lazy-create gutter slot — track if just born ──────────────────────────
-    let gutter_just_created = canvas.get_game_object(&gutter_name).is_none();
-    if gutter_just_created {
-        let spec = create_text_spec(
-            "", font, hex_to_color(&settings.color_line_number), settings.font_size,
-        );
-        let mut object = GameObject::build(&gutter_name)
-            .position(settings.number_padding_left, text_y)
-            .size(4.0, settings.line_height())
-            .tag("gnum")
-            .finish();
-        object.set_text(spec);
-        canvas.add_game_object(gutter_name.clone(), object);
-    }
-
-    // ── reposition on scroll ──────────────────────────────────────────────────
-    if scroll_dirty {
-        set_position(canvas, &line_name,   settings.text_start_x(), text_y);
-        set_position(canvas, &gutter_name, gutter_number_x(&new_gutter_number, settings), text_y);
-    }
-
-    // ── update line text — also force on fresh slots ──────────────────────────
-    let needs_text_rebuild = line_just_created || (content_dirty && match edited_row {
-        Some(edited_row_index) => row_exists && document_row == edited_row_index,
-        None => true,
-    });
-    if needs_text_rebuild {
-        let new_text    = if row_exists { state.get().lines[document_row].clone() } else { String::new() };
-        let cached_text = state.get().cached_line_text[slot_index].clone();
-        if new_text != cached_text {
-            let spec = create_text_spec(
-                &new_text, font, hex_to_color(&settings.color_text), settings.font_size,
-            );
-            update_text_object(canvas, &line_name, spec);
-            state.get_mut().cached_line_text[slot_index] = new_text;
+        if delta >= slot_count {
+            for slot_index in 0..slot_count {
+                let logical = slot_logical(slot_index, new_first_row, slot_count);
+                let doc_row = new_first_row + logical;
+                rebuild_slot(canvas, state, settings, font, slot_index, doc_row, cursor_row, total_lines);
+            }
+        } else {
+            for i in 0..delta {
+                let (slot_index, doc_row) = if raw_delta > 0 {
+                    let p = (old_first_row + i) % slot_count;
+                    let r = new_first_row + slot_count - delta + i;
+                    (p, r)
+                } else {
+                    let p = (new_first_row + i) % slot_count;
+                    let r = new_first_row + i;
+                    (p, r)
+                };
+                rebuild_slot(canvas, state, settings, font, slot_index, doc_row, cursor_row, total_lines);
+            }
         }
     }
 
-    // ── reposition gutter number ──────────────────────────────────────────────
-    let previous_gutter_len = state.get().cached_gutter_number_text[slot_index].len();
-    if scroll_dirty || new_gutter_number.len() != previous_gutter_len {
-        set_position(
-            canvas,
-            &gutter_name,
-            gutter_number_x(&new_gutter_number, settings),
-            text_y,
-        );
+    state.get_mut().first_row = new_first_row;
+
+    // ── Reposition all slots (position only, no content) ─────────────────────
+    if scroll_dirty || cursor_dirty {
+        for slot_index in 0..slot_count {
+            let logical    = slot_logical(slot_index, new_first_row, slot_count);
+            let doc_row    = new_first_row + logical;
+            let row_exists = doc_row < total_lines;
+            let screen_y   = logical as f32 * settings.line_height() - subpixel_y;
+            let text_y     = screen_y + text_y_padding;
+            let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
+
+            set_position(canvas, &format!("line_{}", slot_index), settings.text_start_x_for(total_lines), text_y);
+            set_position(canvas, &format!("gnum_{}", slot_index), gutter_number_x(&gutter_number, settings, total_lines), text_y);
+        }
     }
 
-    // ── update gutter number text / color — also force on fresh slots ─────────
-    let (cached_gutter_number, cached_is_current) = {
-        let s = state.get();
-        (
-            s.cached_gutter_number_text[slot_index].clone(),
-            s.cached_gutter_number_is_current[slot_index],
-        )
+    // ── Cursor highlight ──────────────────────────────────────────────────────
+    if cursor_dirty {
+        let prev_active_slot = state.get().cached_gutter_number_is_current
+            .iter()
+            .position(|&a| a);
+
+        let cursor_in_view  = cursor_row >= new_first_row
+            && cursor_row < new_first_row + slot_count;
+        let new_active_slot = cursor_in_view
+            .then(|| doc_to_slot(cursor_row, slot_count));
+
+        let mut to_update: Vec<(usize, bool)> = Vec::new();
+        if let Some(prev) = prev_active_slot {
+            if new_active_slot != Some(prev) {
+                to_update.push((prev, false));
+            }
+        }
+        if let Some(next) = new_active_slot {
+            if Some(next) != prev_active_slot {
+                to_update.push((next, true));
+            }
+        }
+
+        for (slot_index, is_current) in to_update {
+            let logical       = slot_logical(slot_index, new_first_row, slot_count);
+            let doc_row       = new_first_row + logical;
+            let row_exists    = doc_row < total_lines;
+            let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
+            let color = if is_current {
+                hex_to_color(&settings.color_line_number_active)
+            } else {
+                hex_to_color(&settings.color_line_number)
+            };
+            let spec = create_text_spec(&gutter_number, font, color, settings.font_size);
+            update_text_object(canvas, &format!("gnum_{}", slot_index), spec);
+            state.get_mut().cached_gutter_number_is_current[slot_index] = is_current;
+        }
+    }
+
+    // ── Structural gutter number update — ALL slots, once per structural edit ──
+    // When lines are inserted or deleted, every visible line number may have
+    // shifted. Flush all gutter numbers in one pass on the first tick only,
+    // then set the flag so subsequent ticks of the amortised loop skip this.
+    let is_structural = content_dirty && edited_row.is_none();
+    if is_structural && !state.get().render_gutters_flushed {
+        for slot_index in 0..slot_count {
+            let logical    = slot_logical(slot_index, new_first_row, slot_count);
+            let doc_row    = new_first_row + logical;
+            let row_exists = doc_row < total_lines;
+            let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
+            let is_current    = doc_row == cursor_row;
+            let color = if is_current {
+                hex_to_color(&settings.color_line_number_active)
+            } else {
+                hex_to_color(&settings.color_line_number)
+            };
+            let spec = create_text_spec(&gutter_number, font, color, settings.font_size);
+            update_text_object(canvas, &format!("gnum_{}", slot_index), spec);
+            state.get_mut().cached_gutter_number_is_current[slot_index] = is_current;
+        }
+        state.get_mut().render_gutters_flushed = true;
+    }
+
+    // ── Per-slot render: line text content (amortised one slot per tick) ──────
+    // Gutter numbers for structural edits are handled in the flush above.
+    let first_slot = state.get().render_slot;
+    if first_slot >= slot_count { return; }
+
+    state.get_mut().render_slot = first_slot + 1;
+
+    let slot_index = first_slot;
+    let logical    = slot_logical(slot_index, new_first_row, slot_count);
+    let doc_row    = new_first_row + logical;
+    let row_exists = doc_row < total_lines;
+
+    let needs_text_rebuild = content_dirty && match edited_row {
+        Some(edited) => row_exists && doc_row == edited,
+        None         => true,
     };
-    if gutter_just_created || new_gutter_number != cached_gutter_number || is_current != cached_is_current {
-        let color = if is_current {
-            hex_to_color(&settings.color_line_number_active)
-        } else {
-            hex_to_color(&settings.color_line_number)
-        };
-        let spec = create_text_spec(&new_gutter_number, font, color, settings.font_size);
-        update_text_object(canvas, &gutter_name, spec);
-        let mut s = state.get_mut();
-        s.cached_gutter_number_text[slot_index]       = new_gutter_number;
-        s.cached_gutter_number_is_current[slot_index] = is_current;
+    if needs_text_rebuild {
+        let new_text = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
+        let cached   = state.get().cached_line_text[slot_index].clone();
+        if new_text != cached {
+            let spec = create_text_spec(&new_text, font, hex_to_color(&settings.color_text), settings.font_size);
+            update_text_object(canvas, &format!("line_{}", slot_index), spec);
+            state.get_mut().cached_line_text[slot_index] = new_text;
+        }
     }
 }
-
-
-

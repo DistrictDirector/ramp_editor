@@ -1,6 +1,1 @@
 # ramp_editor
-
-
-
-
-
