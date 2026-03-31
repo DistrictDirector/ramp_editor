@@ -50,7 +50,8 @@ fn rebuild_slot(
     let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
     let is_current    = doc_row == cursor_row;
 
-    let text_spec = create_text_spec(&line_text, font, hex_to_color(&settings.color_text), settings.font_size);
+    let text_color = hex_to_color(&settings.color_text);
+    let text_spec  = create_text_spec(&line_text, font, text_color, settings.font_size);
     update_text_object(canvas, &format!("line_{}", slot_index), text_spec);
     state.get_mut().cached_line_text[slot_index] = line_text;
 
@@ -137,14 +138,10 @@ pub fn update_text_slots(
 
         let mut to_update: Vec<(usize, bool)> = Vec::new();
         if let Some(prev) = prev_active_slot {
-            if new_active_slot != Some(prev) {
-                to_update.push((prev, false));
-            }
+            if new_active_slot != Some(prev) { to_update.push((prev, false)); }
         }
         if let Some(next) = new_active_slot {
-            if Some(next) != prev_active_slot {
-                to_update.push((next, true));
-            }
+            if Some(next) != prev_active_slot { to_update.push((next, true)); }
         }
 
         for (slot_index, is_current) in to_update {
@@ -200,8 +197,10 @@ pub fn update_text_slots(
     if needs_text_rebuild {
         let new_text = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
         let cached   = state.get().cached_line_text[slot_index].clone();
+
         if new_text != cached {
-            let spec = create_text_spec(&new_text, font, hex_to_color(&settings.color_text), settings.font_size);
+            let text_color = hex_to_color(&settings.color_text);
+            let spec = create_text_spec(&new_text, font, text_color, settings.font_size);
             update_text_object(canvas, &format!("line_{}", slot_index), spec);
             state.get_mut().cached_line_text[slot_index] = new_text;
         }

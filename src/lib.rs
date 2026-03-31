@@ -5,8 +5,6 @@ use quartz::{Color, Font, FromSource, NamedKey, Shared, SourceSettings};
 use image::RgbaImage;
 use ramp::prism;
 
-use text::HighlightState;
-
 
 #[derive(Clone)]
 struct EditorSettings {
@@ -35,7 +33,7 @@ impl Default for EditorSettings {
         Self {
             font_size:                16.0,
             line_height_ratio:        1.5,
-            char_width_ratio:         0.56,
+            char_width_ratio:         0.6,
             number_padding_left:      8.0,
             number_padding_right:     18.0,
             gutter_columns:           4.0,
@@ -155,8 +153,6 @@ fn set_bounds(canvas: &mut Canvas, name: &str, x: f32, y: f32, width: f32, heigh
     }
 }
 
-/// Only reposition/resize chrome — no pixel buffer allocation.
-/// Call this on pure size or line-count changes where colors haven't changed.
 fn reposition_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f32, view_height: f32, line_count: usize) {
     let gw = settings.gutter_width_for(line_count);
     let mut update = |canvas: &mut Canvas, name: &str, x: f32, y: f32, width: f32, height: f32| {
@@ -172,7 +168,6 @@ fn reposition_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width:
     update(canvas, "cursor",  gw,        0.0, settings.cursor_width, settings.line_height());
 }
 
-/// Full chrome rebuild — allocates new pixel buffers. Only call when colors change (settings hot-reload).
 fn rebuild_chrome(canvas: &mut Canvas, settings: &EditorSettings, view_width: f32, view_height: f32, line_count: usize) {
     let gw = settings.gutter_width_for(line_count);
     let mut update = |name: &str, x: f32, y: f32, width: f32, height: f32, color: Color| {
@@ -194,6 +189,7 @@ fn ensure_slots(
     state:       &Shared<State>,
     settings:    &EditorSettings,
     font:        &Font,
+    view_width:  f32,
     view_height: f32,
 ) {
     let needed  = needed_slots(view_height, settings.line_height());
@@ -207,7 +203,7 @@ fn ensure_slots(
         let line_spec = text::create_text_spec("", font, hex_to_color(&settings.color_text), settings.font_size);
         let mut line_obj = GameObject::build(&line_name)
             .position(settings.text_start_x_for(line_count), 0.0)
-            .size(4.0, settings.line_height())
+            .size(999_999.0, settings.line_height())
             .tag("line")
             .finish();
         line_obj.set_text(line_spec);
@@ -217,7 +213,7 @@ fn ensure_slots(
         let gutter_spec = text::create_text_spec("", font, hex_to_color(&settings.color_line_number), settings.font_size);
         let mut gutter_obj = GameObject::build(&gutter_name)
             .position(settings.number_padding_left, 0.0)
-            .size(4.0, settings.line_height())
+            .size(settings.gutter_width_for(line_count), settings.line_height())
             .tag("gnum")
             .finish();
         gutter_obj.set_text(gutter_spec);
@@ -226,7 +222,6 @@ fn ensure_slots(
         state.get_mut().line_names.push(line_name);
         state.get_mut().cached_line_text.push(String::new());
         state.get_mut().cached_gutter_number_is_current.push(false);
-        state.get_mut().cached_hl_states.push(HighlightState::Normal);
     }
 
     state.get_mut().invalidate_all();
@@ -249,13 +244,6 @@ struct State {
     last_edited_row:                 Option<usize>,
     cached_line_text:                Vec<String>,
     cached_gutter_number_is_current: Vec<bool>,
-    /// Cached highlight state per *slot* — used to detect when block-comment
-    /// context changes even if the line text itself hasn't changed.
-    cached_hl_states:                Vec<HighlightState>,
-    /// Highlight state at the *start* of each document line (len == lines.len()).
-    /// Recomputed after every edit so the renderer can colour block comments
-    /// that span multiple lines correctly.
-    highlight_states:                Vec<HighlightState>,
     last_view_width:                 f32,
     last_view_height:                f32,
     render_slot:                     usize,
@@ -286,8 +274,6 @@ impl State {
             last_edited_row:                 None,
             cached_line_text:                vec![String::new(); slot_count],
             cached_gutter_number_is_current: vec![false;         slot_count],
-            cached_hl_states:                vec![HighlightState::Normal; slot_count],
-            highlight_states:                vec![HighlightState::Normal],
             last_view_width:                 0.0,
             last_view_height:                0.0,
             render_slot:                     0,
@@ -303,10 +289,7 @@ impl State {
     fn bump_snap(&mut self) { self.bump(); self.snap_cursor = true; }
 
     fn bump_edit(&mut self, row: usize) {
-        self.last_edited_row  = Some(row);
-        // Recompute per-line highlight states so block-comment colouring stays
-        // accurate even if `/*` or `*/` was just typed.
-        self.highlight_states = text::compute_highlight_states(&self.lines);
+        self.last_edited_row = Some(row);
         self.start_render();
         self.bump_snap();
     }
@@ -314,7 +297,6 @@ impl State {
     fn bump_structural(&mut self) {
         self.last_edited_row        = None;
         self.render_gutters_flushed = false;
-        self.highlight_states       = text::compute_highlight_states(&self.lines);
         self.start_render();
         self.bump_snap();
     }
@@ -324,26 +306,19 @@ impl State {
         self.pending_render = true;
     }
 
-    /// Full invalidation — clears content caches and forces a structural rebuild.
-    /// Use when content, colors, or gutter widths have changed.
     fn invalidate_all(&mut self) {
         self.cached_line_text.iter_mut().for_each(|t| t.clear());
         self.cached_gutter_number_is_current.iter_mut().for_each(|f| *f = false);
-        self.cached_hl_states.iter_mut().for_each(|s| *s = HighlightState::Normal);
-        self.highlight_states = text::compute_highlight_states(&self.lines);
-        self.first_row        = usize::MAX;
-        self.last_scroll      = f32::MAX;
+        self.first_row   = usize::MAX;
+        self.last_scroll = f32::MAX;
         self.start_render();
         self.bump_structural();
     }
 
-    /// Cheap invalidation — only forces slot repositioning next tick.
-    /// Use on pure window resize where content and colors are unchanged.
     fn invalidate_positions(&mut self) {
         self.first_row      = usize::MAX;
         self.last_scroll    = f32::MAX;
-        self.pending_render = true;   // ensure the render gate is open so the
-                                      // scroll-dirty path repositions all slots
+        self.pending_render = true;
     }
 
     fn update_scroll_max(&mut self, settings: &EditorSettings, view_height: f32) {
@@ -489,6 +464,7 @@ impl App {
         {
             let s  = settings.get();
             let gw = s.gutter_width_for(1);
+
             add_rectangle(canvas, "bg",      0.0,        0.0, view_width,           view_height,     hex_to_color(&s.background),               "chrome");
             add_rectangle(canvas, "gutter",  0.0,        0.0, gw,                   view_height,     hex_to_color(&s.background_gutter),        "chrome");
             add_rectangle(canvas, "gut_sep", gw - 1.0,   0.0, 1.0,                  view_height,     hex_to_color(&s.color_gutter_separator),   "chrome");
@@ -502,7 +478,7 @@ impl App {
                 let line_spec = text::create_text_spec("", &font, hex_to_color(&s.color_text), s.font_size);
                 let mut line_obj = GameObject::build(&line_name)
                     .position(s.text_start_x_for(1), text_y)
-                    .size(4.0, s.line_height())
+                    .size(999_999.0, s.line_height())
                     .tag("line")
                     .finish();
                 line_obj.set_text(line_spec);
@@ -512,7 +488,7 @@ impl App {
                 let gutter_spec = text::create_text_spec("", &font, hex_to_color(&s.color_line_number), s.font_size);
                 let mut gutter_obj = GameObject::build(&gutter_name)
                     .position(s.number_padding_left, text_y)
-                    .size(4.0, s.line_height())
+                    .size(gw, s.line_height())
                     .tag("gnum")
                     .finish();
                 gutter_obj.set_text(gutter_spec);
@@ -529,13 +505,14 @@ impl App {
             let mut current_state = state_for_key.get_mut();
             match key {
                 Key::Named(NamedKey::Enter)      => current_state.enter(),
-                Key::Named(NamedKey::Delete)      => current_state.backspace(),
+                Key::Named(NamedKey::Space)      => current_state.insert_str(" "),
+                Key::Named(NamedKey::Delete)     => current_state.backspace(),
                 Key::Named(NamedKey::ArrowLeft)  => current_state.move_left(),
                 Key::Named(NamedKey::ArrowRight) => current_state.move_right(),
                 Key::Named(NamedKey::ArrowUp)    => current_state.move_up(),
                 Key::Named(NamedKey::ArrowDown)  => current_state.move_down(),
                 Key::Named(NamedKey::Tab)        => current_state.insert_str(&tab_string),
-                Key::Named(NamedKey::Space) => current_state.insert_str(" "),
+                Key::Named(_)                    => {}
                 Key::Character(characters) => {
                     if characters.as_str() == "\u{8}" || characters.as_str() == "\x7f" {
                         current_state.backspace();
@@ -543,7 +520,6 @@ impl App {
                         current_state.insert_str(characters.as_str());
                     }
                 }
-                _ => {}
             }
         });
 
@@ -581,7 +557,7 @@ impl App {
             let settings_changed = settings_for_tick.changed();
 
             if size_changed || settings_changed {
-                ensure_slots(canvas, &state, &settings_for_tick.get(), &font_for_tick, view_height);
+                ensure_slots(canvas, &state, &settings_for_tick.get(), &font_for_tick, view_width, view_height);
             }
 
             let line_count         = state.get().lines.len();
@@ -590,18 +566,14 @@ impl App {
             if settings_changed || size_changed || line_count_changed {
                 let s = settings_for_tick.get();
                 if settings_changed {
-                    // Colors changed — new pixel buffers + full content rebuild
                     rebuild_chrome(canvas, &s, view_width, view_height, line_count);
                     state.get_mut().last_line_count = line_count;
                     state.get_mut().invalidate_all();
                 } else if line_count_changed {
-                    // Gutter width may have shifted (digit count boundary) — reposition
-                    // and renumber, but no pixel buffer allocation needed
                     reposition_chrome(canvas, &s, view_width, view_height, line_count);
                     state.get_mut().last_line_count = line_count;
                     state.get_mut().invalidate_all();
                 } else {
-                    // Pure window resize — chrome bounds change, content is identical
                     reposition_chrome(canvas, &s, view_width, view_height, line_count);
                     state.get_mut().invalidate_positions();
                 }
