@@ -7,7 +7,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 image = "0.25.6"
-ramp = {version = "0.1.5", package = "ramp2"}
+ramp = {version = "0.1.7", package = "ramp2"}
 
 quartz = { path = "../quartz"}
 flowmango = { path = "../flowmango"}

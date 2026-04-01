@@ -229,6 +229,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "arboard"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
+dependencies = [
+ "clipboard-win 5.4.1",
+ "image 0.25.10",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "percent-encoding",
+ "windows-sys 0.59.0",
+ "x11rb 0.13.2",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -537,7 +557,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04087c1d4a2aa259784a563932aee09cbb0869d490775e051096174b070f3e3d"
 dependencies = [
- "clipboard-win",
+ "clipboard-win 4.5.0",
  "objc",
  "objc-foundation",
  "objc_id",
@@ -551,9 +571,18 @@ version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7191c27c2357d9b7ef96baac1773290d4ca63b24205b82a3fd8a0637afcf0362"
 dependencies = [
- "error-code",
+ "error-code 2.3.1",
  "str-buf",
  "winapi",
+]
+
+[[package]]
+name = "clipboard-win"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+dependencies = [
+ "error-code 3.3.2",
 ]
 
 [[package]]
@@ -958,6 +987,12 @@ dependencies = [
  "libc",
  "str-buf",
 ]
+
+[[package]]
+name = "error-code"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "exr"
@@ -1766,13 +1801,14 @@ dependencies = [
 
 [[package]]
 name = "maverick_os"
-version = "0.3.5"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e9e0a80624053fb4ca8916cce769bb3ddba7ce9686ea8132751fbb574cb9897"
+checksum = "ca4405174a309b957f98ff05254602524ee8743ab384ad7be0cd189e0cb74e7d"
 dependencies = [
  "android-activity",
  "android_logger",
  "anyanymap",
+ "arboard",
  "async-trait",
  "block",
  "block2 0.6.2",
@@ -2964,9 +3000,9 @@ dependencies = [
 
 [[package]]
 name = "prism2"
-version = "0.1.4"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28f24a6c548ed96b5b933c1065f3889a3d0376004b77fae5a0cd1a946754cb9"
+checksum = "33376f9536f67658720bd15edba3d8756855095a3764eb284a5ed1601ed76902"
 dependencies = [
  "anyanymap",
  "downcast-rs 2.0.2",
@@ -3116,9 +3152,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ramp2"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75dcdbbf565a3d63dc96b94ac27508633997aaa72577c445e0a957b781e49555"
+checksum = "193c8081192f380532a8ea1b76374a356121a4b0aad6d8367dddee8f2b7e0908"
 dependencies = [
  "maverick_os",
  "prism2",
@@ -4641,9 +4677,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu_canvas"
-version = "5.0.6"
+version = "5.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c3248eaab084e9828adb0dd79aaedf43700715f30037c893ffd98c21086fffc"
+checksum = "37deb8b3ff4088be909bea9666d1f58c50a95ba8300d5facd8a340465da43298"
 dependencies = [
  "bytemuck",
  "fontdue",

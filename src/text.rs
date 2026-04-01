@@ -1,7 +1,109 @@
 use flowmango::prelude::*;
-use quartz::{Align, Color, Font, Shared, TextSpec, make_text_aligned};
+use quartz::{Align, Color, Font, Shared, TextSpec, SpanSpec, make_text_aligned};
+
+use syntect::highlighting::{ThemeSet, Style};
+use syntect::parsing::SyntaxSet;
+use syntect::easy::HighlightLines;
+
+use std::rc::Rc;
 
 use crate::{EditorSettings, State, hex_to_color};
+
+#[derive(Clone)]
+pub struct SyntaxHighlighter {
+    syntax_set: SyntaxSet,
+    theme_set:  Rc<ThemeSet>,
+    theme_name: String,
+}
+
+impl SyntaxHighlighter {
+    pub fn new() -> Self {
+        let mut theme_set = ThemeSet::load_defaults();
+        let cobalt = ThemeSet::get_theme("resources/cobalt.tmTheme").unwrap();
+        theme_set.themes.insert("Cobalt".to_string(), cobalt);
+
+        Self {
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set:  Rc::new(theme_set),
+            theme_name: "Cobalt".to_string(),
+        }
+    }
+
+    pub fn highlight_line(
+        &self,
+        line_text: &str,
+        font:      &Font,
+        font_size: f32,
+        fallback:  Color,
+    ) -> TextSpec {
+        if line_text.is_empty() {
+            return make_text_aligned("", font_size, font, fallback, Align::Left);
+        }
+
+        let syntax = self.syntax_set
+            .find_syntax_by_extension("rs")
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+
+        let theme = match self.theme_set.themes.get(&self.theme_name) {
+            Some(t) => t,
+            None    => {
+                return make_text_aligned(line_text, font_size, font, fallback, Align::Left);
+            }
+        };
+
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
+        let input = if line_text.ends_with('\n') {
+            line_text.to_string()
+        } else {
+            format!("{}\n", line_text)
+        };
+
+        let regions = match highlighter.highlight_line(&input, &self.syntax_set) {
+            Ok(r)  => r,
+            Err(_) => {
+                return make_text_aligned(line_text, font_size, font, fallback, Align::Left);
+            }
+        };
+
+        let mut spans: Vec<SpanSpec> = Vec::with_capacity(regions.len());
+
+        for (style, text) in &regions {
+            let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+            if clean.is_empty() {
+                continue;
+            }
+
+            let color = syntect_color_to_engine(style);
+            spans.push(SpanSpec {
+                text:           clean,
+                font_size,
+                line_height:    None,
+                font:           font.clone(),
+                color,
+                letter_spacing: 0.0,
+            });
+        }
+
+        if spans.is_empty() {
+            return make_text_aligned(line_text, font_size, font, fallback, Align::Left);
+        }
+
+        make_single_line(spans, Align::Left)
+    }
+}
+
+/// Build a single-line TextSpec from multiple colored spans.
+/// No span carries a line_height, so the renderer never wraps between them.
+fn make_single_line(spans: Vec<SpanSpec>, align: Align) -> TextSpec {
+    TextSpec::new(spans, align)
+}
+
+fn syntect_color_to_engine(style: &Style) -> Color {
+    Color(style.foreground.r, style.foreground.g, style.foreground.b, style.foreground.a)
+}
+
+// ── unchanged helpers ────────────────────────────────────────────────────────
 
 pub fn create_text_spec(text: &str, font: &Font, color: Color, font_size: f32) -> TextSpec {
     make_text_aligned(text, font_size, font, color, Align::Left)
@@ -35,11 +137,14 @@ fn slot_logical(phys: usize, first_row: usize, slot_count: usize) -> usize {
     (phys + slot_count - first_row % slot_count) % slot_count
 }
 
+// ── rebuild_slot now uses the highlighter ────────────────────────────────────
+
 fn rebuild_slot(
     canvas:      &mut Canvas,
     state:       &Shared<State>,
     settings:    &EditorSettings,
     font:        &Font,
+    highlighter: &SyntaxHighlighter,
     slot_index:  usize,
     doc_row:     usize,
     cursor_row:  usize,
@@ -50,8 +155,8 @@ fn rebuild_slot(
     let gutter_number = if row_exists { format!("{}", doc_row + 1) } else { String::new() };
     let is_current    = doc_row == cursor_row;
 
-    let text_color = hex_to_color(&settings.color_text);
-    let text_spec  = create_text_spec(&line_text, font, text_color, settings.font_size);
+    let fallback  = hex_to_color(&settings.color_text);
+    let text_spec = highlighter.highlight_line(&line_text, font, settings.font_size, fallback);
     update_text_object(canvas, &format!("line_{}", slot_index), text_spec);
     state.get_mut().cached_line_text[slot_index] = line_text;
 
@@ -65,11 +170,13 @@ fn rebuild_slot(
     state.get_mut().cached_gutter_number_is_current[slot_index] = is_current;
 }
 
+
 pub fn update_text_slots(
     canvas:        &mut Canvas,
     state:         &Shared<State>,
     settings:      &EditorSettings,
     font:          &Font,
+    highlighter:   &SyntaxHighlighter,
     scroll:        f32,
     cursor_row:    usize,
     cursor_dirty:  bool,
@@ -84,6 +191,7 @@ pub fn update_text_slots(
     let slot_count     = state.get().line_names.len();
     let old_first_row  = state.get().first_row;
 
+    // ── scroll-driven slot recycling ─────────────────────────────────────────
     if scroll_dirty && new_first_row != old_first_row && old_first_row != usize::MAX {
         let raw_delta = new_first_row as i64 - old_first_row as i64;
         let delta     = raw_delta.unsigned_abs() as usize;
@@ -92,7 +200,7 @@ pub fn update_text_slots(
             for slot_index in 0..slot_count {
                 let logical = slot_logical(slot_index, new_first_row, slot_count);
                 let doc_row = new_first_row + logical;
-                rebuild_slot(canvas, state, settings, font, slot_index, doc_row, cursor_row, total_lines);
+                rebuild_slot(canvas, state, settings, font, highlighter, slot_index, doc_row, cursor_row, total_lines);
             }
         } else {
             for i in 0..delta {
@@ -105,14 +213,14 @@ pub fn update_text_slots(
                     let r = new_first_row + i;
                     (p, r)
                 };
-                rebuild_slot(canvas, state, settings, font, slot_index, doc_row, cursor_row, total_lines);
+                rebuild_slot(canvas, state, settings, font, highlighter, slot_index, doc_row, cursor_row, total_lines);
             }
         }
     }
 
     state.get_mut().first_row = new_first_row;
 
-    if scroll_dirty || cursor_dirty {
+    if scroll_dirty || cursor_dirty || content_dirty {
         for slot_index in 0..slot_count {
             let logical    = slot_logical(slot_index, new_first_row, slot_count);
             let doc_row    = new_first_row + logical;
@@ -160,6 +268,7 @@ pub fn update_text_slots(
         }
     }
 
+    // ── structural content change: flush all gutter numbers ──────────────────
     let is_structural = content_dirty && edited_row.is_none();
     if is_structural && !state.get().render_gutters_flushed {
         for slot_index in 0..slot_count {
@@ -183,26 +292,35 @@ pub fn update_text_slots(
     let first_slot = state.get().render_slot;
     if first_slot >= slot_count { return; }
 
-    state.get_mut().render_slot = first_slot + 1;
+    let render_content_dirty = state.get().render_content_dirty;
+    let is_structural_render = render_content_dirty && edited_row.is_none();
 
-    let slot_index = first_slot;
-    let logical    = slot_logical(slot_index, new_first_row, slot_count);
-    let doc_row    = new_first_row + logical;
-    let row_exists = doc_row < total_lines;
+    // For structural changes (enter, backspace-merge, etc.), rebuild ALL
+    // remaining slots this frame so every visible line updates immediately.
+    // For single-line edits, keep the efficient one-slot-per-frame path.
+    let end_slot = if is_structural_render { slot_count } else { first_slot + 1 };
 
-    let needs_text_rebuild = content_dirty && match edited_row {
-        Some(edited) => row_exists && doc_row == edited,
-        None         => true,
-    };
-    if needs_text_rebuild {
-        let new_text = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
-        let cached   = state.get().cached_line_text[slot_index].clone();
+    for slot_index in first_slot..end_slot {
+        let logical    = slot_logical(slot_index, new_first_row, slot_count);
+        let doc_row    = new_first_row + logical;
+        let row_exists = doc_row < total_lines;
 
-        if new_text != cached {
-            let text_color = hex_to_color(&settings.color_text);
-            let spec = create_text_spec(&new_text, font, text_color, settings.font_size);
-            update_text_object(canvas, &format!("line_{}", slot_index), spec);
-            state.get_mut().cached_line_text[slot_index] = new_text;
+        let needs_text_rebuild = render_content_dirty && match edited_row {
+            Some(edited) => row_exists && doc_row == edited,
+            None         => true,
+        };
+        if needs_text_rebuild {
+            let new_text = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
+            let cached   = state.get().cached_line_text[slot_index].clone();
+
+            if new_text != cached {
+                let fallback = hex_to_color(&settings.color_text);
+                let spec     = highlighter.highlight_line(&new_text, font, settings.font_size, fallback);
+                update_text_object(canvas, &format!("line_{}", slot_index), spec);
+                state.get_mut().cached_line_text[slot_index] = new_text;
+            }
         }
     }
+
+    state.get_mut().render_slot = end_slot;
 }

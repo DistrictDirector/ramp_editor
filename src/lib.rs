@@ -5,6 +5,8 @@ use quartz::{Color, Font, FromSource, NamedKey, Shared, SourceSettings};
 use image::RgbaImage;
 use ramp::prism;
 
+use text::SyntaxHighlighter;
+
 
 #[derive(Clone)]
 struct EditorSettings {
@@ -293,10 +295,11 @@ impl State {
         self.start_render();
         self.bump_snap();
     }
-
+    
     fn bump_structural(&mut self) {
         self.last_edited_row        = None;
         self.render_gutters_flushed = false;
+        self.cached_line_text.iter_mut().for_each(|t| { *t = "\x00".to_string(); });
         self.start_render();
         self.bump_snap();
     }
@@ -453,6 +456,8 @@ impl App {
         let font_bytes = assets.get_font("JetBrainsMono-ExtraBold.ttf").expect("font");
         let font       = Font::from_bytes(&font_bytes).expect("invalid font");
 
+        let highlighter = SyntaxHighlighter::new();
+
         let mut scene    = Scene::new(context, CanvasMode::Fullscreen, 1);
         let layer_id     = LayerId(0);
         let (view_width, view_height) = scene.get_virtual_size();
@@ -537,8 +542,9 @@ impl App {
             state_for_scroll.get_mut().scroll_by(delta, s.scroll_speed_max);
         });
 
-        let font_for_tick     = font.clone();
-        let settings_for_tick = settings.clone();
+        let font_for_tick        = font.clone();
+        let settings_for_tick    = settings.clone();
+        let highlighter_for_tick = highlighter.clone();
         canvas.on_update(move |canvas| {
             let view_width  = canvas.get_virtual_size().0;
             let view_height = canvas.get_virtual_size().1;
@@ -620,6 +626,7 @@ impl App {
                 let slot_count = state.get().line_names.len();
                 text::update_text_slots(
                     canvas, &state, &settings_for_tick.get(), &font_for_tick,
+                    &highlighter_for_tick,
                     scroll, cursor_row,
                     cursor_dirty,
                     content_dirty, scroll_dirty, edited_row,
