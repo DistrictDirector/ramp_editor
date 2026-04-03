@@ -132,6 +132,63 @@ fn write_bounds(canvas: &mut Canvas, name: &str, x: f32, y: f32, w: f32, h: f32)
     }
 }
 
+// ── Cached highlight lookup ───────────────────────────────────────────────────
+// Returns the TextSpec for a document row, using the cache when available.
+// If the cache is empty (None), runs the highlighter, stores the result,
+// and returns a clone. The state borrow is carefully scoped.
+
+fn get_or_highlight(
+    state:       &Shared<State>,
+    highlighter: &SyntaxHighlighter,
+    font:        &Font,
+    s:           &EditorSettings,
+    doc_row:     usize,
+) -> TextSpec {
+    // 1. Check if we already have a cached spec.
+    {
+        let st = state.get();
+        if doc_row < st.highlight_cache.len() {
+            if let Some(ref cached) = st.highlight_cache[doc_row] {
+                return cached.clone();
+            }
+        }
+        // Ref dropped here.
+    }
+
+    // 2. Cache miss — snapshot the line text.
+    let line_text = {
+        let st = state.get();
+        if doc_row < st.lines.len() {
+            st.lines[doc_row].clone()
+        } else {
+            String::new()
+        }
+        // Ref dropped here.
+    };
+
+    // 3. Run the highlighter (no borrows held).
+    let fallback = hex_to_color(&s.color_text);
+    let spec     = highlighter.highlight_line(&line_text, font, s.font_size, fallback);
+
+    // 4. Store into cache.
+    {
+        let mut st = state.get_mut();
+        // Ensure the cache vec is big enough.
+        while st.highlight_cache.len() <= doc_row {
+            st.highlight_cache.push(None);
+        }
+        st.highlight_cache[doc_row] = Some(spec.clone());
+    }
+
+    spec
+}
+
+/// Variant for empty/off-screen rows — returns a blank spec without caching.
+fn blank_spec(font: &Font, s: &EditorSettings) -> TextSpec {
+    let fallback = hex_to_color(&s.color_text);
+    make_text_aligned("", s.font_size, font, fallback, Align::Left)
+}
+
 // ── flush ─────────────────────────────────────────────────────────────────────
 // Rules:
 //   1. Always snapshot what you need from state.get() into locals FIRST.
@@ -148,8 +205,6 @@ pub fn flush(
     vh:          f32,
 ) {
     // ── Snapshot immutable state ──────────────────────────────────────────────
-    // All reads from state happen here in one block so the Ref is dropped
-    // before any get_mut() call below.
     let (
         scroll, cursor_row, cursor_col, total_lines, slot_count,
         old_first_row,
@@ -266,20 +321,24 @@ pub fn flush(
         if doc_row < new_first_row || doc_row >= new_first_row + slot_count { continue; }
         let phys = slot_for(doc_row, slot_count);
 
-        // Snapshot text and cache — borrow dropped before write.
-        let (new_text, cached_text) = {
+        // Snapshot cached slot text — borrow dropped before write.
+        let cached_text = {
             let st = state.get();
-            let nt = st.lines[doc_row].clone();
-            let ct = st.slots[phys].text.clone();
-            (nt, ct)
+            st.slots[phys].text.clone()
+            // Ref dropped
+        };
+
+        let new_text = {
+            let st = state.get();
+            st.lines[doc_row].clone()
             // Ref dropped
         };
 
         if new_text != cached_text {
-            let fallback = hex_to_color(&s.color_text);
-            let spec     = highlighter.highlight_line(&new_text, font, s.font_size, fallback);
+            // Use the caching highlighter — only runs syntect if cache is None.
+            let spec = get_or_highlight(state, highlighter, font, s, doc_row);
             write_text(canvas, &format!("line_{}", phys), spec);
-            // Now safe to mutate.
+            // Now safe to mutate slot cache.
             let mut st        = state.get_mut();
             st.slots[phys].text    = new_text;
             st.slots[phys].doc_row = doc_row;
@@ -305,9 +364,8 @@ pub fn flush(
 
         for (phys, doc_row) in stale {
             let new_text = state.get().lines[doc_row].clone();
-            // Ref dropped before write.
-            let fallback = hex_to_color(&s.color_text);
-            let spec     = highlighter.highlight_line(&new_text, font, s.font_size, fallback);
+            // Use cached highlight.
+            let spec = get_or_highlight(state, highlighter, font, s, doc_row);
             write_text(canvas, &format!("line_{}", phys), spec);
             let mut st        = state.get_mut();
             st.slots[phys].text    = new_text;
@@ -322,17 +380,23 @@ pub fn flush(
             let doc_row    = new_first_row + logical;
             let row_exists = doc_row < total_lines;
 
-            // Snapshot text before releasing borrow.
-            let new_text = if row_exists { state.get().lines[doc_row].clone() } else { String::new() };
-            // Ref dropped.
+            if row_exists {
+                // Use cached highlight — only runs syntect when cache entry is None.
+                let spec     = get_or_highlight(state, highlighter, font, s, doc_row);
+                let new_text = state.get().lines[doc_row].clone();
+                write_text(canvas, &format!("line_{}", phys), spec);
 
-            let fallback = hex_to_color(&s.color_text);
-            let spec     = highlighter.highlight_line(&new_text, font, s.font_size, fallback);
-            write_text(canvas, &format!("line_{}", phys), spec);
+                let mut st        = state.get_mut();
+                st.slots[phys].text    = new_text;
+                st.slots[phys].doc_row = doc_row;
+            } else {
+                let spec = blank_spec(font, s);
+                write_text(canvas, &format!("line_{}", phys), spec);
 
-            let mut st        = state.get_mut();
-            st.slots[phys].text    = new_text;
-            st.slots[phys].doc_row = if row_exists { doc_row } else { usize::MAX };
+                let mut st        = state.get_mut();
+                st.slots[phys].text    = String::new();
+                st.slots[phys].doc_row = usize::MAX;
+            }
         }
         state.get_mut().dirty_all_text = false;
     }
@@ -355,7 +419,6 @@ pub fn flush(
     }
 
     // ── 8. Active gutter highlight (cursor row change) ────────────────────────
-    // Process deactivate then activate. Each reads then writes independently.
     for (doc_row_opt, target_active) in [
         (dirty_gutter_deactivate, false),
         (dirty_gutter_activate,   true),
@@ -364,7 +427,6 @@ pub fn flush(
         if doc_row < new_first_row || doc_row >= new_first_row + slot_count { continue; }
         let phys = slot_for(doc_row, slot_count);
 
-        // Check current cached state — drop borrow before write.
         let currently = { state.get().slots[phys].is_active };
         if currently == target_active { continue; }
 
@@ -397,7 +459,7 @@ pub fn flush(
 // ── blit_slot ─────────────────────────────────────────────────────────────────
 // Highlight + position one slot. Called only from scroll recycling (step 1)
 // where we know new content is required.
-// Carefully snapshots, drops the Ref, then writes.
+// Now uses the highlight cache so scrolling through already-seen lines is free.
 
 fn blit_slot(
     canvas:      &mut Canvas,
@@ -420,18 +482,26 @@ fn blit_slot(
     let text_y     = screen_y + text_y_pad;
     let row_exists = doc_row < total_lines;
 
-    // Snapshot cached text — Ref dropped before any write.
-    let (new_text, cached_text) = {
+    // Snapshot cached slot text — Ref dropped before any write.
+    let cached_text = {
         let st = state.get();
-        let nt = if row_exists { st.lines[doc_row].clone() } else { String::new() };
-        let ct = st.slots[phys].text.clone();
-        (nt, ct)
+        st.slots[phys].text.clone()
         // Ref dropped
     };
 
+    let new_text = if row_exists {
+        state.get().lines[doc_row].clone()
+    } else {
+        String::new()
+    };
+
     if new_text != cached_text {
-        let fallback = hex_to_color(&s.color_text);
-        let spec     = highlighter.highlight_line(&new_text, font, s.font_size, fallback);
+        // Use highlight cache — syntect only runs if this row hasn't been highlighted yet.
+        let spec = if row_exists {
+            get_or_highlight(state, highlighter, font, s, doc_row)
+        } else {
+            blank_spec(font, s)
+        };
         write_text(canvas, &format!("line_{}", phys), spec);
         let mut st        = state.get_mut();
         st.slots[phys].text    = new_text;

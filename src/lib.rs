@@ -1,7 +1,7 @@
 mod text;
 
 use flowmango::prelude::*;
-use quartz::{Color, Font, FromSource, NamedKey, Shared, SourceSettings};
+use quartz::{Color, Font, FromSource, NamedKey, Shared, SourceSettings, TextSpec};
 use image::RgbaImage;
 use ramp::prism;
 
@@ -227,6 +227,10 @@ pub(crate) struct State {
     pub last_view_width:  f32,
     pub last_view_height: f32,
 
+    // Per-document-row highlight cache. Indexed by doc row.
+    // None = needs rehighlight, Some = cached TextSpec ready to blit.
+    pub highlight_cache: Vec<Option<TextSpec>>,
+
     // Dirty flags — set by mutation methods, consumed once per frame by flush().
     pub needs_layout:              bool,
     pub needs_chrome_reposition:   bool,
@@ -251,6 +255,7 @@ impl State {
             snap_cursor:    false,
             last_view_width:  0.0,
             last_view_height: 0.0,
+            highlight_cache: vec![None],  // one entry per line
             // Everything dirty on first frame.
             needs_layout:              true,
             needs_chrome_reposition:   true,
@@ -264,6 +269,29 @@ impl State {
     }
 
     pub fn slot_count(&self) -> usize { self.slots.len() }
+
+    /// Invalidate the highlight cache for every row from `from_row` onward.
+    /// Called after structural edits (insert/remove lines) where syntax context
+    /// may have changed for all subsequent lines.
+    fn invalidate_highlight_from(&mut self, from_row: usize) {
+        for i in from_row..self.highlight_cache.len() {
+            self.highlight_cache[i] = None;
+        }
+    }
+
+    /// Invalidate the highlight cache for a single row.
+    fn invalidate_highlight_row(&mut self, row: usize) {
+        if row < self.highlight_cache.len() {
+            self.highlight_cache[row] = None;
+        }
+    }
+
+    /// Clear the entire highlight cache (e.g. on theme/settings change).
+    fn invalidate_highlight_all(&mut self) {
+        for entry in &mut self.highlight_cache {
+            *entry = None;
+        }
+    }
 
     fn invalidate_slots_from(&mut self, from_row: usize) {
         for slot in &mut self.slots {
@@ -316,6 +344,7 @@ impl State {
         let bi   = self.char_to_byte(row, self.cursor_column);
         self.lines[row].insert_str(bi, text);
         self.cursor_column   += text.chars().count();
+        self.invalidate_highlight_row(row);
         self.dirty_doc_rows.push(row);
         self.snap_cursor         = true;
         self.dirty_cursor_chrome = true;
@@ -328,6 +357,7 @@ impl State {
             let be  = self.char_to_byte(row, self.cursor_column);
             self.lines[row].drain(bs..be);
             self.cursor_column  -= 1;
+            self.invalidate_highlight_row(row);
             self.dirty_doc_rows.push(row);
             self.snap_cursor         = true;
             self.dirty_cursor_chrome = true;
@@ -337,6 +367,9 @@ impl State {
             let prev_row  = row - 1;
             let prev_len  = self.lines[prev_row].chars().count();
             self.lines[prev_row].push_str(&remainder);
+            // Remove the deleted row's cache entry and invalidate from prev_row onward.
+            self.highlight_cache.remove(row);
+            self.invalidate_highlight_from(prev_row);
             let old_cursor    = self.cursor_row;
             self.cursor_row   = prev_row;
             self.cursor_column = prev_len;
@@ -352,6 +385,9 @@ impl State {
         self.cursor_row    += 1;
         self.cursor_column  = 0;
         self.lines.insert(self.cursor_row, rest);
+        // Insert a new cache entry for the new line and invalidate from the split onward.
+        self.highlight_cache.insert(self.cursor_row, None);
+        self.invalidate_highlight_from(row);
         self.on_structural_edit(row, old);
     }
 
@@ -442,7 +478,7 @@ impl App {
     pub fn new(context: &mut Context, assets: Assets) -> Scene {
         let settings = Shared::new(EditorSettings::default());
 
-        let font_bytes = assets.get_font("JetBrainsMono-ExtraBold.ttf").expect("font");
+        let font_bytes = assets.get_font("JetBrainsMono-Bold.ttf").expect("font");
         let font       = Font::from_bytes(&font_bytes).expect("invalid font");
 
         let highlighter = SyntaxHighlighter::new();
@@ -566,6 +602,8 @@ impl App {
                 st.needs_chrome_reposition   = true;
                 st.dirty_gutters_from        = Some(0);
                 st.dirty_cursor_chrome       = true;
+                // Invalidate all highlight caches since theme/font may have changed.
+                st.invalidate_highlight_all();
                 for slot in &mut st.slots {
                     *slot = SlotCache::empty();
                 }
